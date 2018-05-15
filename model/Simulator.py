@@ -9,6 +9,7 @@ import imageio
 import os
 import contextlib
 import random
+import time
 
 from model.Agent import DoomAgent
 from model.Experience import ExperienceRecorder
@@ -70,14 +71,18 @@ class DoomSimulator:
                                  use key "mem_location')
             self.experience_memory = H5ExperienceRecorder(args)
         else:
+            if args['use_human_data']:
+                self.using_human_data = True
+                self.human_data = H5ExperienceRecorder(args)
+                self.get_human_data_f = args['probability_draw_human_data']
             self.experience_memory = ExperienceRecorder(args)
             
         self.generator = DoomLevelGenerator()
         self.num_maps=0
         self.map=0
         
-        self.episode_timeout_steps = 2250 #~5 minutes
-        self.inaction_timeout_steps = 500 #~60 seconds
+        self.episode_timeout_steps = args['episode_length'] #~5 minutes
+        #self.inaction_timeout_steps = 500 #~60 seconds
         
     def _define_action_groups(self,splits,a_sizes,group_cond):
         
@@ -190,7 +195,7 @@ class DoomSimulator:
                 self.last_hit_n_ago+=1
                 current_kills = max(self.monster_deaths[-1] - self.monster_deaths[-2],0)
                 self.episode_kills += current_kills 
-                if current_kills!=0 and self.mode=='record':
+                if current_kills!=0:
                     print('You scored, ',current_kills,' kills!')
             
 
@@ -257,7 +262,8 @@ class DoomSimulator:
             elif self.mode == 'train' or self.mode=='pretrain':
                 a_indecies,action = self.agent.choose_action(s,m,abuffer,training_step,testing,self.selected_weapon)
                 self.env.make_action(action,self.frame_skip)         
-                episode_buffer.append([s,m,abuffer,a_indecies])
+                episode_buffer.append([s,m,abuffer,a_indecies,lbuffer])
+                self.currently_attacking = True if action[9] else False
                 
             if self.env.is_episode_finished() and not self.env.is_player_dead():
                 #catch if Vizdoom ended the episode because player completed level
@@ -305,11 +311,11 @@ class DoomSimulator:
                     #end episode after ~10 minutes
                     print('timeout!')
                     episode_finished = True
-                if level_steps>self.inaction_timeout_steps:
-                    if (self.level_explored[-1] == self.level_explored[-self.inaction_timeout_steps]
-                       and self.monster_deaths[-1] == self.monster_deaths[-self.inaction_timeout_steps]):
-                        print('inaction timeout!')
-                        episode_finished = True
+#                if level_steps>self.inaction_timeout_steps:
+#                    if (self.level_explored[-1] == self.level_explored[-self.inaction_timeout_steps]
+#                       and self.monster_deaths[-1] == self.monster_deaths[-self.inaction_timeout_steps]):
+#                        print('inaction timeout!')
+#                        episode_finished = True
                         
         
         self.previous_level_explored += self.level_explored[-1]           
@@ -361,23 +367,24 @@ class DoomSimulator:
                 frames = np.array(frames)      
                 imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)
                 
-    def train(self,size,update_every_n_episodes,test_every_n_episodes=100):
+    def train(self,size,update_every_n_episodes,test_every_n_episodes=100,update_VAE_every_n_episodes=0):
         episode=0
         self.env.init()
         training_steps = 0
+        t = time.time()
+        update_vae = update_VAE_every_n_episodes>0
         while True:
             episode_buffer,kills,explored,steps,_ = self.play_episode(training_step=training_steps)
             self.agent.reset_state()
             training_steps += steps
             print('Episode ',episode,' Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
-            if steps>=1000:
-                self.experience_memory.append_episode(episode_buffer)
+            self.experience_memory.append_episode(episode_buffer)
             episode += 1
             
             if episode % update_every_n_episodes==0 and self.experience_memory.n_episodes>size:
-                batch = self.experience_memory.get_batch(size)
-                loss, g_n = self.agent.train(size,batch,steps)
-                print('i: ',episode,' loss: ',loss,' g_n: ',g_n)
+                self.get_batch(training_steps,size)
+                loss_mse, loss_classify,g_n = self.agent.train(size,batch,steps)
+                print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n)
             
             if episode % test_every_n_episodes == 0:
                 self.agent.save(episode)
@@ -393,7 +400,32 @@ class DoomSimulator:
                         
                 frames = np.array(frames)
                 imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)
-                       
+                
+            if update_vae:
+                if episode % update_VAE_every_n_episodes==0:
+                    batch = self.get_batch(training_steps,size,get_lab=True)
+                    loss_mse,loss_classify,loss_recon,loss_lab,loss_kl,g_n=self.agent.update_VAE(size,batch,steps)
+                    print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n,' loss recon ',loss_recon,
+                          ' loss label ',loss_lab,' loss kl ', loss_kl)
+                
+            steps_per_sec = training_steps//(time.time()-t)
+            msteps_per_day = 60*60*24*steps_per_sec/1000000
+            print('Steps per second',steps_per_sec,' Steps per day ',msteps_per_day,' million')
+                
+    def get_batch(self,steps,size,get_lab=False):
+        if not self.using_human_data:
+            batch = self.experience_memory.get_batch(size,get_lbuff=get_lab)
+        else:
+            p = self.get_human_data_f(steps)
+            draw_human = random.random()<p
+            if draw_human:
+                human_batch = self.human_memory.get_batch(1,get_lbuff=get_lab)
+                agent_batch = self.experience_memory.get_batch(size-1,get_lbuff=get_lab)
+                batch = merge_batches(human_batch,agent_batch)
+            else:
+                batch = self.experience_memory.get_batch(size)
+        
+        return batch
         
 
         

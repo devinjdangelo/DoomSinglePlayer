@@ -47,8 +47,12 @@ class DoomAgent:
         self.saver = tf.train.Saver(max_to_keep=100,keep_checkpoint_every_n_hours=1)
         if args['load_model']:
             print('Loading Model...')
-            ckpt = tf.train.get_checkpoint_state(self.model_path)
-            self.saver.restore(self.sess,ckpt.model_checkpoint_path)
+            if args['load_vae']:
+                ckpt = tf.train.get_checkpoint_state(self.model_path+'VAE/')
+                self.saver.restore(self.sess,ckpt.model_checkpoint_path)
+            else:
+                ckpt = tf.train.get_checkpoint_state(self.model_path)
+                self.saver.restore(self.sess,ckpt.model_checkpoint_path)
         else:
             self.sess.run(tf.global_variables_initializer())
         
@@ -98,12 +102,56 @@ class DoomAgent:
         if self.use_goals_in_net:
             feed_dict[self.net.goals] = self.goal_vector
         
-        loss_mse,loss_classify,g_n,v_n,_ = self.sess.run([self.net.loss_mse,
+        loss_mse,loss_classify,g_n,_ = self.sess.run([self.net.loss_mse,
                                         self.net.loss_classify,
                                         self.net.grad_norms,
-                                        self.net.var_norms,
                                         self.net.apply_grads],feed_dict=feed_dict)
         return loss_mse, loss_classify,g_n
+    
+    def update_VAE(self,batch_size,batch,steps):
+        frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,labels_batch = batch
+
+        a_tensors = [action_indecies_to_tensor(a_taken_batch[:,i],self.num_offsets,self.num_predict_m,
+                                               self.num_actions[i]) for i in range(len(self.group_buttons))]
+        
+        m_in_prepped = self.prep_m(measurements_batch[:,:self.num_observe_m],levels=True,verbose=False)
+        
+        target_m_prepped = self.prep_m(target_batch,levels=False,verbose=False)
+        
+        frame_prepped = np.zeros(frame_batch.shape)
+        frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-18.4)/14.5
+        frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-3)/8.05
+        frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.30 
+        
+        c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
+        h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
+        
+        labels_prepped = (labels_batch>0).astype(np.float32) #convert to 0 and 1 only
+        
+        feed_dict = {self.net.observation:frame_prepped,
+                     self.net.label:labels_prepped,
+            self.net.measurements:m_in_prepped,
+            self.net.action_history:a_history_batch,
+            self.net.target:target_m_prepped,
+            self.net.steps:steps,
+            self.net.c_in:c_state,
+            self.net.h_in:h_state}
+        
+        chosen_dict = {i: d for i, d in zip(self.net.a_chosen, a_tensors)}
+        feed_dict.update(chosen_dict)
+        
+        if self.use_goals_in_net:
+            feed_dict[self.net.goals] = self.goal_vector
+        
+        loss_mse,loss_classify,loss_recon,loss_lab,loss_kl,g_n,_ = self.sess.run([self.net.loss_mse,
+                                        self.net.loss_classify,
+                                        self.net.reconstruction_loss,
+                                        self.net.label_loss,
+                                        self.net.kl_loss,
+                                        self.net.grad_norms_all,
+                                        self.net.apply_grads_all],feed_dict=feed_dict)
+    
+        return loss_mse,loss_classify,loss_recon,loss_lab,loss_kl,g_n
     
     def network_pass_to_actions(self,advantages):
         #convert forward pass of network into indecies which indicate

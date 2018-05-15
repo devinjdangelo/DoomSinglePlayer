@@ -34,11 +34,12 @@ args['group_cond'] = [group1_cond,group2_cond,group3_cond,group4_cond,group5_con
 
 args['start_lr'] = 1e-4
 args['half_lr_every_n_steps'] = 1e6
-args['sequence_length'] = 512
+args['episode_length'] = 1024
+args['sequence_length'] = 256
 #dropout args passed to tf.train.piecewise_constant then dropout layer
 args['exploration'] = 'bayesian' #currently only exploration type implemented. See DoomAgent.choose_action 
-args['dropoutrates'] = [0.2,0.1,0.05,.01,.001]
-args['dropoutboundaries']= [100000,300000,500000,1000000]
+args['dropoutrates'] = [.75,0.5,0.25,0.15,0.1,.01,.001]
+args['dropoutboundaries']= [100000,200000,500000,1000000,1500000,2000000]
 
 #TODO make measurements customizable via args
 args['num_measurements'] = 29 #must not be changed without corresponding change to DoomSimulator.process_game_vars

@@ -41,65 +41,70 @@ class DFP_Network():
         
     def _build_net(self):
         self._build_inputs()
-        self._build_output()
-        
         self.learning_rate = tf.train.exponential_decay(self.start_lr,self.steps,self.half_lr_every_n_steps,0.5)
-        self._build_loss_train_ops()
+
+        with tf.variable_scope("control/output"):
+            self._build_output()
+            self._build_loss_train_ops()
         
         if self.use_latent_z:
-            self._build_latent_future_predictor()
-            self._build_latent_z_train_ops()
+            #self._build_latent_future_predictor()
+            #self._build_latent_z_train_ops()
             self._build_VAE_loss_train_ops()
         
     def _build_inputs(self):
-        
-        self._build_measurements()
-        self._build_action_history()
-        
-        concatlist = [self.in_action3,self.dense_m3]
-        if self.use_goals:
-            self._build_goals()
-            concatlist.append(self.dense_g3)
+        with tf.variable_scope("control"):
+            self._build_measurements()
+            self._build_action_history()
+            concatlist = [self.in_action3,self.dense_m3]
+            
+            if self.use_goals:
+                self._build_goals()
+                concatlist.append(self.dense_g3)
+                
         if self.use_latent_z:
             #are we computing Z from frame or feeding it? True->compute it
-            self.compute_z = tf.placeholder_with_default(True,shape=())
-            
-            def feed_fn():
-                self.feed_z = tf.placeholder(shape=[None,self.z_dim],dtype=tf.float32)
-                return self.feed_z,tf.zeros([1]),tf.zeros([1])
-            
-            compute_fn = lambda : self._build_VAE_deconv() #nothing defined within is executed if self.compute_z is False
-            
-            self.latent_z,self.outframe,self.outlabel = tf.cond(self.compute_z,true_fn=compute_fn,false_fn=feed_fn)
-            concatlist.append(self.latent_z)
+            with tf.variable_scope("VAE"):
+                self.compute_z = tf.placeholder_with_default(True,shape=())
+                
+                def feed_fn():
+                    self.feed_z = tf.placeholder(shape=[None,self.z_dim],dtype=tf.float32)
+                    return self.feed_z,tf.zeros([1]),tf.zeros([1])
+                
+                compute_fn = lambda : self._build_VAE_deconv() #nothing defined within is executed if self.compute_z is False
+                
+                self.latent_z,self.outframe,self.outlabel = tf.cond(self.compute_z,true_fn=compute_fn,false_fn=feed_fn)
+                concatlist.append(self.latent_z)
         else:
-            self._build_conv()
-            self.latent_z = fully_connected(self.convout,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            with tf.variable_scope("control"):
+                self._build_conv()
+                self.latent_z = fully_connected(self.convout,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+                
+                concatlist.append(self.latent_z)
+        
+        with tf.variable_scope("control"):
+            self.merged_input1 = tf.concat(concatlist,1,name="InputMerge")
+            self.merged_input2 = fully_connected(self.merged_input1,256,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
             
-            concatlist.append(self.latent_z)
-        
-        self.merged_input1 = tf.concat(concatlist,1,name="InputMerge")
-        self.merged_input2 = fully_connected(self.merged_input1,256,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        
-        self.cell =  tf.nn.rnn_cell.BasicLSTMCell(256)
-        rnn_in = tf.reshape(self.merged_input2,[-1,self.time_steps,256])
-        self.c_in = tf.placeholder(shape=[None, self.cell.state_size.c],dtype=tf.float32)
-        self.h_in = tf.placeholder(shape=[None, self.cell.state_size.h], dtype=tf.float32)
-        state_in = tf.contrib.rnn.LSTMStateTuple(self.c_in, self.h_in)
-         
-        self.lstm_outputs, self.lstm_state = tf.nn.dynamic_rnn(self.cell, rnn_in, initial_state=state_in)
-         
-        self.lstm_outputs = tf.reshape(self.lstm_outputs, [-1, 256])   
-        
-        self.exploring = tf.placeholder_with_default(False,shape=())
-        if self.apply_dropout:
-            dropoutrate = tf.train.piecewise_constant(self.steps,self.dropoutboundaries,self.dropoutrates)
-        else:
-            dropoutrate = 0
+            self.cell =  tf.nn.rnn_cell.BasicLSTMCell(256)
+            rnn_in = tf.reshape(self.merged_input2,[-1,self.time_steps,256])
+            self.c_in = tf.placeholder(shape=[None, self.cell.state_size.c],dtype=tf.float32)
+            self.h_in = tf.placeholder(shape=[None, self.cell.state_size.h], dtype=tf.float32)
+            state_in = tf.contrib.rnn.LSTMStateTuple(self.c_in, self.h_in)
+             
+            self.lstm_outputs, self.lstm_state = tf.nn.dynamic_rnn(self.cell, rnn_in, initial_state=state_in)
+             
+            self.lstm_outputs = tf.reshape(self.lstm_outputs, [-1, 256])   
             
-        self.merged_dropout = dropout(self.lstm_outputs,keep_prob=1-dropoutrate,is_training=self.exploring)
+            self.exploring = tf.placeholder_with_default(False,shape=())
+            if self.apply_dropout:
+                dropoutrate = tf.train.piecewise_constant(self.steps,self.dropoutboundaries,self.dropoutrates)
+            else:
+                dropoutrate = 0
+                
+            self.merged_dropout = dropout(self.lstm_outputs,keep_prob=1-dropoutrate,is_training=self.exploring)
             
     
     def _build_conv(self):
@@ -205,33 +210,35 @@ class DFP_Network():
         return self.z_computed,self.deconv_6,self.deconv_6l
                 
     def _build_measurements(self):
-        
-        self.measurements = tf.placeholder(shape=[None,self.num_measurements[0]],dtype=tf.float32)
-        self.dense_m1 = fully_connected(flatten(self.measurements),128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        self.dense_m2 = fully_connected(self.dense_m1,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        self.dense_m3 = fully_connected(self.dense_m2,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())    
+        with tf.variable_scope("measurements"):        
+            self.measurements = tf.placeholder(shape=[None,self.num_measurements[0]],dtype=tf.float32)
+            self.dense_m1 = fully_connected(flatten(self.measurements),128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.dense_m2 = fully_connected(self.dense_m1,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.dense_m3 = fully_connected(self.dense_m2,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())    
     
     def _build_goals(self):
-        self.goals = tf.placeholder(shape=[None,self.num_measurements[1]],dtype=tf.float32)
-        self.dense_g1 = fully_connected(flatten(self.goals),128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        self.dense_g2 = fully_connected(self.dense_g1,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        self.dense_g3 = fully_connected(self.dense_g2,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())  
+        with tf.variable_scope("goals"):  
+            self.goals = tf.placeholder(shape=[None,self.num_measurements[1]],dtype=tf.float32)
+            self.dense_g1 = fully_connected(flatten(self.goals),128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.dense_g2 = fully_connected(self.dense_g1,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.dense_g3 = fully_connected(self.dense_g2,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())  
 
 
     def _build_action_history(self):
-        self.action_history = tf.placeholder(shape=[None,self.num_buttons],dtype=tf.float32)
-        self.in_action1 = fully_connected(flatten(self.action_history),128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        self.in_action2 = fully_connected(self.in_action1,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        self.in_action3 = fully_connected(self.in_action2,128,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())  
+        with tf.variable_scope("action"):  
+            self.action_history = tf.placeholder(shape=[None,self.num_buttons],dtype=tf.float32)
+            self.in_action1 = fully_connected(flatten(self.action_history),128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.in_action2 = fully_connected(self.in_action1,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.in_action3 = fully_connected(self.in_action2,128,
+                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())  
         
     def _build_latent_future_predictor(self):
         
@@ -337,11 +344,17 @@ class DFP_Network():
         
         
         #Get & apply gradients from network
-        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,scope='control')
         self.gradients = tf.gradients(self.loss,global_vars)
-        self.var_norms = tf.global_norm(global_vars)
         grads,self.grad_norms = tf.clip_by_global_norm(self.gradients,1)
         self.apply_grads = self.trainer.apply_gradients(list(zip(grads,global_vars)))
+        
+        loss_all = 0.5*self.loss+ 0.5*self.VAE_loss
+        
+        global_vars_all = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        self.gradients_all = tf.gradients(loss_all,global_vars_all)
+        grads_all,self.grad_norms_all = tf.clip_by_global_norm(self.gradients_all,1)
+        self.apply_grads_all = self.trainer.apply_gradients(list(zip(grads_all,global_vars_all)))
         
     def _build_VAE_loss_train_ops(self):
         

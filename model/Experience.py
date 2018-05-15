@@ -56,16 +56,12 @@ class ExperienceRecorder:
         measurments = np.stack(episode_buffer[:,1])
         a_history = np.stack(episode_buffer[:,2])
         a_taken = np.stack(episode_buffer[:,3])
-        if l>4:
-            lbuffer = np.stack(episode_buffer[:,4])
+        lbuffer = np.stack(episode_buffer[:,4])
         
-        if l==4:
-            self.add_data(frame,measurments,a_history,a_taken)
-        else:
-            self.add_data(frame,measurments,a_history,a_taken,lbuffer)
+        self.add_data(frame,measurments,a_history,a_taken,lbuffer)
         self.need_to_build_offsets = True
 
-    def add_data(self,frame,measurments,a_history,a_taken):
+    def add_data(self,frame,measurments,a_history,a_taken,lbuffer):
         
         if self.max_episodes is not None:
             if self.n_episodes >= self.max_episodes:
@@ -78,33 +74,42 @@ class ExperienceRecorder:
         self.measurements.append(measurments) 
         self.a_history.append(a_history) 
         self.a_taken.append(a_taken) 
+        self.lbuffer.append(lbuffer)
 
         
-    def get_batch(self,size):
+    def get_batch(self,size,get_lbuff=False):
         #get batch of episodes from recording.
         if self.need_to_build_offsets:
             self.build_offsets()
         
-        if len(self.valid_indecies)<size:
-            self.valid_indecies = list(range(self.n_episodes))
+        #if len(self.valid_indecies)<size:
+            #self.valid_indecies = list(range(self.n_episodes))
             
         episode_indecies = np.random.choice(self.valid_indecies, size, replace=False).tolist()
-        self.valid_indecies = [idx for idx in self.valid_indecies if idx not in episode_indecies]
+        #self.valid_indecies = [idx for idx in self.valid_indecies if idx not in episode_indecies]
         
-        frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch = self.retrieve_batch(episode_indecies)
-        return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch)
+        if not get_lbuff:
+            frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch = self.retrieve_batch(episode_indecies)
+            return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch)
+        else:
+            frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch = self.retrieve_batch(episode_indecies,get_lbuff=True)
+            return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch)
 
         
-    def retrieve_batch(self,episode_indecies):  
+    def retrieve_batch(self,episode_indecies,get_lbuff=False):  
         frame_batch = [self.frame[i] for i in episode_indecies]
         measurements_batch = [self.measurements[i] for i in episode_indecies]
         a_history_batch = [self.a_history[i] for i in episode_indecies]
         a_taken_batch = [self.a_taken[i] for i in episode_indecies]
         target_batch = [self.targets[i] for i in episode_indecies]
-        return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch
+        if get_lbuff:
+            labels_batch = [self.lbuffer[i] for i in episode_indecies]
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,labels_batch
+        else:
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch
 
         
-    def process_batch(self,frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch):
+    def process_batch(self,frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch=None):
         episode_lengths = [len(episode) for episode in a_taken_batch]
         masks = [gen_random_mask(l,self.sequence_length,10) for l in episode_lengths]
         frame_batch = np.stack([frame_batch[i][mask] for i,mask in enumerate(masks)])
@@ -119,7 +124,12 @@ class ExperienceRecorder:
         a_taken_batch = a_taken_batch.reshape([-1,self.num_action_splits])
         target_batch = target_batch.reshape([-1,len(self.offsets),self.num_predict_m])
         
-        return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch
+        if label_batch is not None:
+            label_batch = np.stack([label_batch[i][mask] for i,mask in enumerate(masks)])
+            label_batch = label_batch.reshape([-1,self.xdim,self.ydim,1])
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch
+        else:
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch
     
     def masked_episode_to_gif(self):
         episode_indecies = np.random.choice(self.n_episodes, 1, replace=False).tolist()
@@ -141,9 +151,9 @@ class ExperienceRecorder:
     def n_episodes(self):
         return len(self.a_taken)
                     
-    @property
-    def epoch_progress(self):
-        return 100 - 100*len(self.valid_indecies)/self.n_episodes
+    #@property
+    #def epoch_progress(self):
+       # return 100 - 100*len(self.valid_indecies)/self.n_episodes
     
 
 

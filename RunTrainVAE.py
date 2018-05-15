@@ -12,7 +12,7 @@ args['load_h5_into_mem'] = False
 
 args['use_latent_z'] = True
 args['start_lr'] = 8e-3 
-args['half_lr_every_n_steps'] = 1e5
+args['half_lr_every_n_steps'] = 1.2e5
 
 trainer = Trainer(args)
 batch_size = 128

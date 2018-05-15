@@ -191,7 +191,29 @@ def find_longest_gap(mask,check_for):
             current = 0
 
     return max(longest, current), min(shortest,current)
+  
     
+def merge_batches(batch1,batch2):
+    if len(batch1)==5 and len(batch2)==5:
+        frames = np.stack([batch1[0],batch2[0]])
+        m = np.stack([batch1[1],batch2[1]])
+        ahist = np.stack([batch1[2],batch2[2]])
+        ataken = np.stack([batch1[3],batch2[3]])
+        target = np.stack([batch1[4],batch2[4]])
+        return frames,m,ahist,ataken,target
+    elif len(batch1)==6 and len(batch2)==6:
+        frames = np.stack([batch1[0],batch2[0]])
+        m = np.stack([batch1[1],batch2[1]])
+        ahist = np.stack([batch1[2],batch2[2]])
+        ataken = np.stack([batch1[3],batch2[3]])
+        target = np.stack([batch1[4],batch2[4]])
+        lbuffer = np.stack([batch1[5],batch2[5]])
+        return frames,m,ahist,ataken,target,lbuffer
+    else:
+        raise ValueError('batches are not both of length 5 or 6')
+    
+    
+
 
 def get_pc_target(sbuff,local_means=False):
     #calculate pixel control targets from most recent 2 frames

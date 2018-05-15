@@ -74,14 +74,18 @@ class H5ExperienceRecorder(ExperienceRecorder):
         self.a_history.append(a_history.reshape(-1)) 
         self.a_taken.append(a_taken.reshape(-1)) 
         
-    def retrieve_batch(self,episode_indecies):  
+    def retrieve_batch(self,episode_indecies,get_lbuff=False):  
         #reshape 1D array back into proper dims
         frame_batch = [self.frame[i].reshape(-1,self.xdim,self.ydim,3) for i in episode_indecies]
         measurements_batch = [self.measurements[i].reshape(-1,self.num_measurements) for i in episode_indecies]
         a_history_batch = [self.a_history[i].reshape(-1,self.num_buttons) for i in episode_indecies]
         a_taken_batch = [self.a_taken[i].reshape(-1,self.num_action_splits) for i in episode_indecies]
         target_batch = [self.targets[i].reshape(-1,len(self.offsets),self.num_predict_m) for i in episode_indecies]
-        return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch      
+        if get_lbuff:
+            labels_batch = [self.lbuffer[i].reshape(-1,self.xdim,self.ydim,1) for i in episode_indecies]
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,labels_batch
+        else:
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch    
 
     
 if __name__=='__main__':
