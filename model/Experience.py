@@ -32,6 +32,7 @@ class ExperienceRecorder:
         self.a_history = []
         self.a_taken = []
         self.valid_indecies = []
+        self.lbuffer = []
                    
     def build_offsets(self):
         print('constructing offsets...')
@@ -69,6 +70,7 @@ class ExperienceRecorder:
                 self.measurements.pop(0)
                 self.a_history.pop(0)
                 self.a_taken.pop(0)
+                self.lbuffer.pop(0)
         
         self.frame.append(frame) 
         self.measurements.append(measurments) 
@@ -85,7 +87,7 @@ class ExperienceRecorder:
         #if len(self.valid_indecies)<size:
             #self.valid_indecies = list(range(self.n_episodes))
             
-        episode_indecies = np.random.choice(self.valid_indecies, size, replace=False).tolist()
+        episode_indecies = np.random.choice(self.n_episodes, size, replace=False).tolist()
         #self.valid_indecies = [idx for idx in self.valid_indecies if idx not in episode_indecies]
         
         if not get_lbuff:
@@ -129,7 +131,7 @@ class ExperienceRecorder:
             label_batch = label_batch.reshape([-1,self.xdim,self.ydim,1])
             return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch
         else:
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch
     
     def masked_episode_to_gif(self):
         episode_indecies = np.random.choice(self.n_episodes, 1, replace=False).tolist()

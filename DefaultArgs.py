@@ -38,12 +38,12 @@ args['episode_length'] = 1024
 args['sequence_length'] = 256
 #dropout args passed to tf.train.piecewise_constant then dropout layer
 args['exploration'] = 'bayesian' #currently only exploration type implemented. See DoomAgent.choose_action 
-args['dropoutrates'] = [.75,0.5,0.25,0.15,0.1,.01,.001]
-args['dropoutboundaries']= [100000,200000,500000,1000000,1500000,2000000]
+args['dropoutrates'] = [.75,0.5,0.25,0.15,0.1,.05,.01]
+args['dropoutboundaries']= [100000,200000,500000,1000000,2000000,5000000]
 
 #TODO make measurements customizable via args
 args['num_measurements'] = 29 #must not be changed without corresponding change to DoomSimulator.process_game_vars
-args['num_observe_m'] = 23 #agent observe the first e.g. 24 measurements (normalized by levels_normalization)
+args['num_observe_m'] = 24 #agent observe the first e.g. 24 measurements (normalized by levels_normalization)
 args['num_predict_m'] = 11 #agent predicts the last e.g. 9 measurements changes over the future offset steps, normalized by delta_normalization
 args['num_classify_m'] = 2 #apply classification loss to the last e.g. 2 predicted m
 
@@ -52,9 +52,9 @@ args['num_classify_m'] = 2 #apply classification loss to the last e.g. 2 predict
 #this is used to normalize measurments to rough standard range [-1 to 1] or [0 to 1] as desired.
 args['levels_normalization'] = [(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
                                 (0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
-                                (0,1),(0,1),(50,12),(10,6),(55,15),(1,1),(80,25)] 
+                                (0,1),(0,1),(50,50),(10,10),(55,55),(2,2),(50,50),(50,50)] 
 
-args['delta_normalization'] = [(0,30),(0,10),(0,40),(0,2),(0,40),(0,40),(2,2),(20,20),(8,80),(0,1),(0,1)]
+args['delta_normalization'] = [(0,50),(0,16),(0,60),(0,2),(0,80),(0,80),(2,2),(30,30),(10,10),(0,1),(0,1)]
 
 
 
@@ -62,7 +62,7 @@ args['delta_normalization'] = [(0,30),(0,10),(0,40),(0,2),(0,40),(0,40),(2,2),(2
 #goal vector and offset vector can be optimized in the middle of training, does not interact with network or any data in the network
 #WARNING changing frame_skip changes the meaning of 'step', other args should be adjusted to account for this, e.g. offsets is in num_steps
 args['frame_skip'] = 4 #update DoomAgent.choose_action cooldowns to be dynamic if you want to change to other than 4
-args['goal_vector'] = [0.1,0.1,0.1,0.1,0.5,0.1,1,0.5,1,-1,1] 
+args['goal_vector'] = [0.1,0.1,0.1,0.1,0.5,0,1,0.5,2,-1,2] 
 args['offsets'] = [2,4,8,16,32,64]
 args['offset_vector'] = [0,0,1,1,.5,.5]
 args['use_goals'] = False

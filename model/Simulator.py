@@ -33,7 +33,7 @@ class DoomSimulator:
         self.mode = args['mode']
         
         self.xdim,self.ydim = args['framedims']
-        self.frame_skip = args['frameskip'] if 'frameskip' in args else 4         
+        self.frame_skip = args['frameskip'] if 'frameskip' in args else 4          
         self.test_stat_file = args['test_stat_file'] if 'test_stat_file' in args else None
         reset_file = args['reset_file'] if 'reset_file' in args else False
         self.model_path = args['model_path'] if 'model_path' in args else None
@@ -62,6 +62,9 @@ class DoomSimulator:
             args['group_buttons'] = self.group_buttons
             args['group_actions'] = self.group_actions
             self.agent = DoomAgent(args)
+            with open('model_stats.csv', 'w') as f:
+                wr = csv.writer(f)
+                wr.writerow(['iter','mse loss','classify loss','frame loss','label loss','kl loss'])
         else:
             raise ValueError('DoomSimulator has no mode, ',str(self.mode),'.')
         
@@ -162,6 +165,7 @@ class DoomSimulator:
 
         health = m_raw[2]
         armor = m_raw[3]
+
         
         self.monster_deaths.append(m_raw[5])
        
@@ -174,7 +178,6 @@ class DoomSimulator:
             #make compute_circles_visited return xpos,ypos list of unique points to overwrite running appended list of all points
             area_explored,self.level_xpos,self.level_ypos = compute_circles_visited(self.level_xpos,self.level_ypos,verbose=False)
             self.level_explored.append(area_explored)
-            area_explored += self.previous_level_explored
             
             if self.mode=='record' and self.level_explored[-1]>self.level_explored[-2]:
                 print('You explored ',self.level_explored[-1]-self.level_explored[-2],' circles!')
@@ -202,6 +205,8 @@ class DoomSimulator:
         else: 
             self.level_explored.append(0)
             area_explored = 0
+            
+        area_explored += self.previous_level_explored
         
         m = [fist_active,pistol_active,shotgun_active,chaingun_active,rocket_active,
              plasma_active,bfg_active,super_active,chainsaw_active,has_fist,has_pistol,has_shotgun,
@@ -240,15 +245,14 @@ class DoomSimulator:
         s = skimage.transform.resize(s,(self.xdim,self.ydim,3))
         s = skimage.color.rgb2lab(s)
         
-        if self.mode == 'record':
-            lbuffer = state.labels_buffer
-            lbuffer = lbuffer[:-80,:]
-            lbuffer = skimage.transform.resize(lbuffer,(self.xdim,self.ydim))
+        lbuffer = state.labels_buffer
+        lbuffer = lbuffer[:-80,:]
+        lbuffer = skimage.transform.resize(lbuffer,(self.xdim,self.ydim))
 
         abuffer = np.zeros(self.num_buttons)
         m = self.process_game_vars(state.game_variables,state.labels)
 
-        while not episode_finished:          
+        while not episode_finished:             
             if self.mode == 'record':
                 attack_actions = []
                 for _ in range(self.frame_skip):
@@ -290,7 +294,7 @@ class DoomSimulator:
                 episode_steps+=1
                 state = self.env.get_state()
                 m_raw = state.game_variables
-                m = self.process_game_vars(m_raw,state.labels)      
+                m = self.process_game_vars(m_raw,state.labels)        
                 
                 s = state.screen_buffer
                 s = s[:-80,:,:] #crop out the HUD
@@ -300,10 +304,10 @@ class DoomSimulator:
                     frames.append(s)
                     
                 s = skimage.color.rgb2lab(s)
-                if self.mode == 'record':
-                    lbuffer = state.labels_buffer
-                    lbuffer = lbuffer[:-80,:]
-                    lbuffer = skimage.transform.resize(lbuffer,(self.xdim,self.ydim))
+
+                lbuffer = state.labels_buffer
+                lbuffer = lbuffer[:-80,:]
+                lbuffer = skimage.transform.resize(lbuffer,(self.xdim,self.ydim))
                                     
                 abuffer = action
                 
@@ -311,14 +315,14 @@ class DoomSimulator:
                     #end episode after ~10 minutes
                     print('timeout!')
                     episode_finished = True
-#                if level_steps>self.inaction_timeout_steps:
-#                    if (self.level_explored[-1] == self.level_explored[-self.inaction_timeout_steps]
-#                       and self.monster_deaths[-1] == self.monster_deaths[-self.inaction_timeout_steps]):
-#                        print('inaction timeout!')
-#                        episode_finished = True
+#                 if level_steps>self.inaction_timeout_steps:
+#                     if (self.level_explored[-1] == self.level_explored[-self.inaction_timeout_steps]
+#                        and self.monster_deaths[-1] == self.monster_deaths[-self.inaction_timeout_steps]):
+#                         print('inaction timeout!')
+#                         episode_finished = True
                         
         
-        self.previous_level_explored += self.level_explored[-1]           
+        self.previous_level_explored += self.level_explored[-1]              
         return episode_buffer,self.episode_kills,self.previous_level_explored,episode_steps,frames
 
     def record_episodes(self):
@@ -364,29 +368,74 @@ class DoomSimulator:
                        wr = csv.writer(teststatfile)
                        wr.writerow(['{:.2f}'.format(x) for x in savelist])
                        
-                frames = np.array(frames)      
+                frames = np.array(frames)       
                 imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)
                 
-    def train(self,size,update_every_n_episodes,test_every_n_episodes=100,update_VAE_every_n_episodes=0):
+    def train(self,size,update_c_n,update_vae_n,update_all_n,test_every_n=100):
         episode=0
         self.env.init()
         training_steps = 0
         t = time.time()
-        update_vae = update_VAE_every_n_episodes>0
+        update_all = update_all_n>0
+        update_c = update_c_n>0
+        update_vae = update_vae_n>0
         while True:
-            episode_buffer,kills,explored,steps,_ = self.play_episode(training_step=training_steps)
+            train_on_test = episode%2==0
+            episode_buffer,kills,explored,steps,_ = self.play_episode(training_step=training_steps,testing=train_on_test)
             self.agent.reset_state()
             training_steps += steps
             print('Episode ',episode,' Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
             self.experience_memory.append_episode(episode_buffer)
             episode += 1
-            
-            if episode % update_every_n_episodes==0 and self.experience_memory.n_episodes>size:
-                self.get_batch(training_steps,size)
-                loss_mse, loss_classify,g_n = self.agent.train(size,batch,steps)
-                print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n)
-            
-            if episode % test_every_n_episodes == 0:
+                            
+            if update_all:
+                if episode % update_all_n==0 and self.experience_memory.n_episodes>size:
+                    iters_per_update = 4
+                    avg_recon = 0
+                    avg_lab = 0
+                    avg_kl = 0
+                    avg_mse = 0
+                    avg_class = 0
+                    for i in range(iters_per_update):
+                        batch = self.get_batch(training_steps,size,get_lab=True)
+                        loss_mse,loss_classify,loss_recon,loss_lab,loss_kl,g_n=self.agent.update_all(size,batch,training_steps)
+                        print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n,' loss recon ',loss_recon,
+                              ' loss label ',loss_lab,' loss kl ', loss_kl) 
+                        avg_recon += 1/iters_per_update*loss_recon
+                        avg_lab += 1/iters_per_update*loss_lab
+                        avg_kl += 1/iters_per_update*loss_kl
+                        avg_mse += 1/iters_per_update*loss_mse
+                        avg_class += 1/iters_per_update*loss_classify
+
+                    savelist = [episode,avg_mse,avg_class,avg_recon,avg_lab,avg_kl]
+
+                    with open('model_stats.csv', 'a') as f:
+                        wr = csv.writer(f)
+                        wr.writerow(['{:.2f}'.format(x) for x in savelist])
+                        
+            if update_vae:
+                if episode % update_vae_n==0 and self.experience_memory.n_episodes>size:
+                    iters_per_update = 10
+                    avg_recon = 0
+                    avg_lab = 0
+                    avg_kl = 0
+                    for i in range(iters_per_update):
+                        batch = self.get_batch(training_steps,size,get_lab=True)
+                        loss_recon,loss_lab,loss_kl = self.agent.update_vae(size,batch,training_steps)
+                        print('i',episode,' loss_recon: ', loss_recon, ' loss label ',loss_lab,' loss kl ',loss_kl)
+                        avg_recon += 1/iters_per_update*loss_recon
+                        avg_lab += 1/iters_per_update*loss_lab
+                        avg_kl += 1/iters_per_update*loss_kl
+                    print('i AVG',episode,' loss_recon ',avg_recon, ' loss label ',avg_lab,' loss kl ',avg_kl)
+                    
+            if update_c:
+                if episode % update_c_n==0 and self.experience_memory.n_episodes>size:
+                    batch = self.get_batch(training_steps,size)
+                    loss_mse, loss_classify,g_n = self.agent.update_c(size,batch,training_steps)
+                    print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n)
+                        
+                    
+            if episode % test_every_n == 0:
                 self.agent.save(episode)
                 _,kills,explored,steps,frames = self.play_episode(training_step=training_steps,testing=True)
                 self.agent.reset_state()
@@ -399,14 +448,10 @@ class DoomSimulator:
                         wr.writerow(['{:.2f}'.format(x) for x in savelist])
                         
                 frames = np.array(frames)
+                frames = (frames*255).astype(np.uint8)
                 imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)
                 
-            if update_vae:
-                if episode % update_VAE_every_n_episodes==0:
-                    batch = self.get_batch(training_steps,size,get_lab=True)
-                    loss_mse,loss_classify,loss_recon,loss_lab,loss_kl,g_n=self.agent.update_VAE(size,batch,steps)
-                    print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n,' loss recon ',loss_recon,
-                          ' loss label ',loss_lab,' loss kl ', loss_kl)
+
                 
             steps_per_sec = training_steps//(time.time()-t)
             msteps_per_day = 60*60*24*steps_per_sec/1000000
@@ -419,11 +464,16 @@ class DoomSimulator:
             p = self.get_human_data_f(steps)
             draw_human = random.random()<p
             if draw_human:
-                human_batch = self.human_memory.get_batch(1,get_lbuff=get_lab)
-                agent_batch = self.experience_memory.get_batch(size-1,get_lbuff=get_lab)
-                batch = merge_batches(human_batch,agent_batch)
+                hsize = size//2
+                asize = size-hsize
+                human_batch = self.human_data.get_batch(hsize,get_lbuff=get_lab)
+                if hsize>0:
+                    agent_batch = self.experience_memory.get_batch(asize,get_lbuff=get_lab)
+                    batch = merge_batches(human_batch,agent_batch)
+                else:
+                    batch = human_batch
             else:
-                batch = self.experience_memory.get_batch(size)
+                batch = self.experience_memory.get_batch(size,get_lbuff=get_lab)
         
         return batch
         
