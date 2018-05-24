@@ -35,17 +35,21 @@ args['group_cond'] = [group1_cond,group2_cond,group3_cond,group4_cond,group5_con
 args['start_lr'] = 1e-4
 args['half_lr_every_n_steps'] = 1e6
 args['episode_length'] = 1024
-args['sequence_length'] = 256
+args['clip_n_timesteps'] = 256
+args['sequence_length'] = 192
+
+args['reward_weights'] = [1/50,1/16,1/60,1/2,1/20,1/100,2,0.25,2,-10,100]
+args['reward_discount_rate'] = .98
+
 #dropout args passed to tf.train.piecewise_constant then dropout layer
 args['exploration'] = 'bayesian' #currently only exploration type implemented. See DoomAgent.choose_action 
 args['dropoutrates'] = [.75,0.5,0.25,0.15,0.1,.05,.01]
-args['dropoutboundaries']= [100000,200000,500000,1000000,2000000,5000000]
+args['dropoutboundaries']= [100000,200000,500000,1000000,2000000,3000000]
 
 #TODO make measurements customizable via args
 args['num_measurements'] = 29 #must not be changed without corresponding change to DoomSimulator.process_game_vars
 args['num_observe_m'] = 24 #agent observe the first e.g. 24 measurements (normalized by levels_normalization)
 args['num_predict_m'] = 11 #agent predicts the last e.g. 9 measurements changes over the future offset steps, normalized by delta_normalization
-args['num_classify_m'] = 2 #apply classification loss to the last e.g. 2 predicted m
 
 #normalizations tuples (a,b) correspond to the tranformation (m-a)/b ->z score with mean a and sd b
 #where m is the measurement at the same index as the tuple.
@@ -54,7 +58,6 @@ args['levels_normalization'] = [(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
                                 (0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
                                 (0,1),(0,1),(50,50),(10,10),(55,55),(2,2),(50,50),(50,50)] 
 
-args['delta_normalization'] = [(0,50),(0,16),(0,60),(0,2),(0,80),(0,80),(2,2),(30,30),(10,10),(0,1),(0,1)]
 
 
 
@@ -62,15 +65,9 @@ args['delta_normalization'] = [(0,50),(0,16),(0,60),(0,2),(0,80),(0,80),(2,2),(3
 #goal vector and offset vector can be optimized in the middle of training, does not interact with network or any data in the network
 #WARNING changing frame_skip changes the meaning of 'step', other args should be adjusted to account for this, e.g. offsets is in num_steps
 args['frame_skip'] = 4 #update DoomAgent.choose_action cooldowns to be dynamic if you want to change to other than 4
-args['goal_vector'] = [0.1,0.1,0.1,0.1,0.5,0,1,0.5,2,-1,2] 
-args['offsets'] = [2,4,8,16,32,64]
-args['offset_vector'] = [0,0,1,1,.5,.5]
-args['use_goals'] = False
-args['num_offsets'] = len(args['offsets'])
 
 args['use_latent_z'] = True
 args['z_dim'] = 256
-args['z_offsets'] = [6,36]
 
 args['gif_path'] = './gifs'
 

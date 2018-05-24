@@ -211,6 +211,17 @@ def merge_batches(batch1,batch2):
         return frames,m,ahist,ataken,target,lbuffer
     else:
         raise ValueError('batches are not both of length 5 or 6')
+        
+def stream_to_PV(stream,drate):
+    t = stream.shape[1]
+    e = stream.shape[0]
+    def PV(i):
+        dr = ([1]*i) + [(drate**j) for j in range(t-i)]
+        dr = np.tile(dr,e).reshape(e,t)
+        return np.sum(np.multiply(stream,dr),axis=1)
+    PVs = [PV(i) for i in range(t)]
+    PVs = np.stack(PVs,axis=1)
+    return PVs
     
     
 

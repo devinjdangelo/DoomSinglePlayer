@@ -35,9 +35,7 @@ class H5ExperienceRecorder(ExperienceRecorder):
             self.measurements = self.h5file.get_node("/","measurements")
             self.a_history = self.h5file.get_node("/","a_history")
             self.a_taken = self.h5file.get_node("/","a_taken")
-            if self.offsets is not None:
-                self.build_offsets()
-                
+
         except:
             print_exc()
             try:
@@ -80,12 +78,11 @@ class H5ExperienceRecorder(ExperienceRecorder):
         measurements_batch = [self.measurements[i].reshape(-1,self.num_measurements) for i in episode_indecies]
         a_history_batch = [self.a_history[i].reshape(-1,self.num_buttons) for i in episode_indecies]
         a_taken_batch = [self.a_taken[i].reshape(-1,self.num_action_splits) for i in episode_indecies]
-        target_batch = [self.targets[i].reshape(-1,len(self.offsets),self.num_predict_m) for i in episode_indecies]
         if get_lbuff:
             labels_batch = [self.lbuffer[i].reshape(-1,self.xdim,self.ydim,1) for i in episode_indecies]
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,labels_batch
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,labels_batch
         else:
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch    
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch    
 
     
 if __name__=='__main__':
