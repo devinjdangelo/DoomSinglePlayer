@@ -12,12 +12,13 @@ from model.utils import *
 class DoomAgent:
     def __init__(self,args):
         
-        self.n_target_groups = args['n_target_groups']
-        self.agg_group = args['agg_groups']
+        self.num_mixtures = args['num_mixtures']
         
         self.group_buttons = args['group_buttons']
         self.group_actions = args['group_actions']
              
+        
+        self.get_temp = args['temp_schedule']        
         
         self.attack_group_idx = len(self.group_actions) - 1
         attack_action = [0]*self.group_buttons[self.attack_group_idx]
@@ -101,6 +102,11 @@ class DoomAgent:
         
         c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
         h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
+
+        print(frame_prepped.shape)
+        print(m_in_prepped.shape)
+        print(target_batch.shape)
+        print(a_history_batch.shape)
                             
         feed_dict = {self.net.observation:frame_prepped,
             self.net.measurements:m_in_prepped,
@@ -113,10 +119,11 @@ class DoomAgent:
         chosen_dict = {i: d for i, d in zip(self.net.a_chosen, a_tensors)}
         feed_dict.update(chosen_dict)
                 
-        loss,g_n,_ = self.sess.run([self.net.loss,
+        loss,sharp,g_n,_ = self.sess.run([self.net.loss,
+                                        self.net.sharpness,
                                         self.net.grad_norms_all,
                                         self.net.apply_grads_all],feed_dict=feed_dict)
-        return loss,g_n
+        return loss,sharp,g_n
     
     def update_all(self,batch_size,batch,steps):
         frame_batch,measurements_batch,a_history_batch,a_taken_batch,labels_batch,target_batch = batch
@@ -136,13 +143,13 @@ class DoomAgent:
         h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
         
         labels_prepped = (labels_batch>0).astype(np.float32) #convert to 0 and 1 only
-               
+             
         
         feed_dict = {self.net.observation:frame_prepped,
                      self.net.label:labels_prepped,
             self.net.measurements:m_in_prepped,
             self.net.action_history:a_history_batch,
-            self.net.target:target,
+            self.net.target:target_batch,
             self.net.steps:steps,
             self.net.c_in:c_state,
             self.net.h_in:h_state}
@@ -150,8 +157,9 @@ class DoomAgent:
         chosen_dict = {i: d for i, d in zip(self.net.a_chosen, a_tensors)}
         feed_dict.update(chosen_dict)
                
-        loss,loss_recon,loss_lab,loss_kl,g_n,_ = self.sess.run(
+        loss,sharp,loss_recon,loss_lab,loss_kl,g_n,_ = self.sess.run(
                                     [self.net.loss,
+                                    self.net.sharpness,
                                     self.net.reconstruction_loss,
                                     self.net.label_loss,
                                     self.net.kl_loss,
@@ -160,8 +168,11 @@ class DoomAgent:
 
         #if steps%(1025*20)==0:
             #self.VAE_gif_out(outlabel,out_frame,frame_batch,labels_prepped,steps)
+
+        if steps%(1025*5):
+            np.savetxt('test_target.csv',target_batch,delimiter=',')
     
-        return loss,loss_recon,loss_lab,loss_kl,g_n
+        return loss,sharp,loss_recon,loss_lab,loss_kl,g_n
 
     def VAE_gif_out(self,outlabel,out_frame,frame_batch,labels_prepped,steps):
 
@@ -188,11 +199,12 @@ class DoomAgent:
     
 
     def choose_action(self,s,m,ahistory,total_steps,testing,selected_weapon):
-        if self.exploration == 'bayesian':
+        if self.exploration == 'MDN':
                         
-            explore = not testing
             m_in = m[:self.num_observe_m]
-            m_prepped = self.prep_m(m_in,levels=True)
+            m_prepped = self.prep_m(m_in)
+            
+            temp = self.get_temp(total_steps) if not testing else 0
             
             out_tensors = [self.net.lstm_state,self.net.best_action]
 
@@ -203,7 +215,7 @@ class DoomAgent:
             self.net.action_history:[ahistory],
             self.net.c_in:self.c_state,
             self.net.h_in:self.h_state,
-            self.net.exploring:explore,
+            self.net.temp:temp,
             self.net.steps:total_steps,
             self.net.time_steps:1})            
 
@@ -213,7 +225,7 @@ class DoomAgent:
             #the following extracts the action from each action group
             #this works because of how the actions are broadcast together
             a = []
-            base = self.total_actions
+            base = action
             for size in self.num_actions:
                 a.append(base%size)    
                 base = base//size               
@@ -284,6 +296,8 @@ class DoomAgent:
        
             if verbose:
                 print("range level ",i,": ", np.amin(mout[:,i])," to ",np.amax(mout[:,i]))
+
+        return mout
 
 
     

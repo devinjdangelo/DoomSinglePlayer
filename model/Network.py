@@ -10,24 +10,15 @@ class DFP_Network():
     def __init__(self,args):
         
         self.a_size = args['num_actions']
-        self.num_offsets = args['num_offsets']
-        self.num_measurements = [args['num_observe_m'],args['n_target_groups']]
-        self.num_classify_m = args['num_classify_m']
+        self.num_measurements = [args['num_observe_m']]
         self.framedim = args['framedims']
         self.num_action_splits = args['num_action_splits']
         
         self.start_lr = args['start_lr']
         self.half_lr_every_n_steps = args['half_lr_every_n_steps']
-        
-        self.dropoutrates = args['dropoutrates'] if 'dropoutrates' in args else None
-        self.dropoutboundaries = args['dropoutboundaries'] if 'dropoutrates' in args else None
-        if self.dropoutrates is None or self.dropoutboundaries is None:
-            self.apply_dropout = False
-            print('Bayseian Dropout Exploration not applied, please supply args dropoutrates and dropoutboundaries')
-        else:
-            self.apply_dropout = True
-        
-        self.use_goals = args['use_goals']
+
+        self.num_mixtures = args['num_mixtures']
+               
         self.use_latent_z = args['use_latent_z'] if 'use_latent_z' in args else False
         self.num_buttons = args['num_buttons']
         self.sequence_length = args['sequence_length']       
@@ -95,15 +86,7 @@ class DFP_Network():
             self.lstm_outputs, self.lstm_state = tf.nn.dynamic_rnn(self.cell, rnn_in, initial_state=state_in)
              
             self.lstm_outputs = tf.reshape(self.lstm_outputs, [-1, 256])   
-            
-            self.exploring = tf.placeholder_with_default(False,shape=())
-            if self.apply_dropout:
-                dropoutrate = tf.train.piecewise_constant(self.steps,self.dropoutboundaries,self.dropoutrates)
-            else:
-                dropoutrate = 0
-                
-            self.merged_dropout = dropout(self.lstm_outputs,keep_prob=1-dropoutrate,is_training=self.exploring)
-            
+                            
     
     def _build_conv(self):
         
@@ -234,13 +217,13 @@ class DFP_Network():
         outputdim = self.z_dim*self.z_num_offsets
         outputdim_as = [outputdim*self.a_size[i] for i in range(self.num_action_splits)]
         
-        self.z_expectation1 =  fully_connected(self.merged_dropout,256,
+        self.z_expectation1 =  fully_connected(self.lstm_outputs,256,
             activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
         self.z_expectation2 =  fully_connected(self.z_expectation1,outputdim,
             activation_fn=None,weights_initializer=he_normal())       
         self.z_expectation2 = tf.reshape(self.z_expectation2,[-1,self.z_num_offsets,self.z_dim])  
         
-        layer1 = lambda : fully_connected(self.merged_dropout,256,
+        layer1 = lambda : fully_connected(self.lstm_outputs,256,
             activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
         
         
@@ -273,11 +256,12 @@ class DFP_Network():
 
         
         #average expectation accross all actions
-        self.expectation1 =  fully_connected(self.merged_dropout,256,
+        self.expectation1 =  fully_connected(self.lstm_outputs,256,
             activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
         
-        self.expectation2 = fully_connected(self.merged_dropout,outputdim,
+        self.expectation2 = fully_connected(self.lstm_outputs,outputdim,
             activation_fn=None,weights_initializer=he_normal())  
+        self.expectation2 = tf.reshape(self.expectation2,[-1,1,16,3])
         
         #split actions into functionally seperable groups
         #e.g. the expectations of movements depend intimately on
@@ -288,7 +272,7 @@ class DFP_Network():
         #when the number of subactions is large while maintaining the ability
         #to choose from a large number of actions.
         
-        layer1 = lambda : fully_connected(self.merged_dropout,256,
+        layer1 = lambda : fully_connected(self.lstm_outputs,256,
             activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
         
         
@@ -309,47 +293,51 @@ class DFP_Network():
         self.a_chosen = [tf.placeholder(shape=[None,self.a_size[i],self.num_mixtures,3],dtype=tf.float32) for i in range(self.num_action_splits)]
         self.a_pred = [tf.reduce_sum(tf.multiply(self.advantages2[i],self.a_chosen[i]),axis=1) for i in range(self.num_action_splits)]
 
+        #the loss function will apply appropriate activations to these unscaled values
         self.prediction = tf.add_n(self.a_pred)
-        mu_pred = self.prediction[:,:,0]
-        sigma_pred = tf.nn.relu(self.prediction[:,:,1])
-        pi_pred = tf.nn.softmax(self.prediction[:,:,2])
-        self.prediction = tf.stack([mu_pred,sigma_pred,pi_pred],axis=2)
 
         #find best action assumes batch size of 1 at inference time...
         #i.e. give me best action in current state
         out = self.advantages2[0][0,:,:,:]
         for i in range(self.num_action_splits-1):
-        	out = tf.expand_dims(out,0)
-        	a_next = self.advantages2[i+1][0,:,:,:]
-        	a_next = tf.expand_dims(a_next,1)
-        	out = tf.add(out,a_next)
-        	out = tf.reshape(out,[-1,self.num_mixtures,3])
+            out = tf.expand_dims(out,0)
+            a_next = self.advantages2[i+1][0,:,:,:]
+            a_next = tf.expand_dims(a_next,1)
+            out = tf.add(out,a_next)
+            out = tf.reshape(out,[-1,self.num_mixtures,3])
 
         mu = out[:,:,0]
-        #sigma = tf.nn.relu(out[:,:,1])
+        sigma = tf.nn.relu(out[:,:,1]) 
         pi = tf.nn.softmax(out[:,:,2])
 
-        expected_value = tf.reduce_sum(tf.multiply(mu,pi),axis=1)
+        self.temp = tf.placeholder_with_default(0.0,shape=())
+        dist = tf.contrib.distributions.Normal(0.0,1.0)
+        mu_shifted = mu + sigma * dist.sample(sample_shape=tf.shape(sigma)) * self.temp
+        expected_value = tf.reduce_sum(tf.multiply(mu_shifted,pi),axis=1)
         self.best_action = tf.argmax(expected_value,0)
 
         
     
-    def MDN_loss(target,prediction):
+    def MDN_loss(self,target,prediction):
         #Calculates the loss function for an MDN with prediction and target
-        target = tf.tile(target,self.num_mixtures)
+        target = tf.tile(target,[self.num_mixtures])
         target = tf.reshape(target,[-1,self.num_mixtures])
         
         oneDivSqrtTwoPI = 1 / math.sqrt(2*math.pi)
         mu = prediction[:,:,0]
-        sigma = prediction[:,:,1]
-        pi = prediction[:,:,2]
+        sigma = tf.nn.relu(prediction[:,:,1])
+        pi_p = tf.nn.softmax(prediction[:,:,2])
         
         z = (target - mu)/(sigma + 1e-8)
-        p = oneDivSqrtTwoPI * (1/(sigma + 1e-8)) * tf.exp(-tf.square(z)/2)
+        z = -tf.square(z)/2
+        p = oneDivSqrtTwoPI * (1/(sigma + 1e-8)) * tf.exp(z)
+        p = p * pi_p
         p = tf.reduce_sum(p,axis=1)
         loss = -tf.log(p + 1e-8)
         loss = tf.reduce_mean(loss,axis=0)
-        return loss
+        sharpness = tf.maximum(1-tf.pow(sigma+ 1e-8,tf.constant(0.05,dtype=tf.float32)),tf.constant(0,dtype=tf.float32))
+        sharpness = tf.reduce_mean(tf.reduce_sum(sharpness*pi_p,axis=1)) #I penalize the net for having very sharp PDFs in the mixture (i.e. very low variance is bad)
+        return loss, sharpness
                 
         
         
@@ -357,7 +345,9 @@ class DFP_Network():
         #This is the actual
         self.target = tf.placeholder(shape=[None],dtype=tf.float32)
 
-        self.loss = self.MDN_loss(target,self.prediction)
+        self.loss,self.sharpness = self.MDN_loss(self.target,self.prediction)
+        
+        self.combined_loss = self.loss + self.sharpness
         
         self.trainer_c = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
                                      beta1=0.95,
@@ -367,11 +357,11 @@ class DFP_Network():
         
         #Get & apply gradients from network
         global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,scope='control')
-        self.gradients = tf.gradients(self.loss,global_vars)
+        self.gradients = tf.gradients(self.combined_loss,global_vars)
         grads,self.grad_norms = tf.clip_by_global_norm(self.gradients,1)
         self.apply_grads = self.trainer_c.apply_gradients(list(zip(grads,global_vars)))
         
-        loss_all = self.loss*.95 + .05 * self.VAE_loss
+        loss_all = self.combined_loss*.95 + .05 * self.VAE_loss
         
         self.trainer_all = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
                              beta1=0.95,

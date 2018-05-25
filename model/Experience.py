@@ -77,8 +77,8 @@ class ExperienceRecorder:
             frame_batch,measurements_batch,a_history_batch,a_taken_batch = self.retrieve_batch(episode_indecies)
             return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch)
         else:
-            frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch = self.retrieve_batch(episode_indecies,get_lbuff=True)
-            return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,label_batch)
+            frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch = self.retrieve_batch(episode_indecies,get_lbuff=True)
+            return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch)
 
         
     def retrieve_batch(self,episode_indecies,get_lbuff=False):  
@@ -88,9 +88,9 @@ class ExperienceRecorder:
         a_taken_batch = [self.a_taken[i] for i in episode_indecies]
         if get_lbuff:
             labels_batch = [self.lbuffer[i] for i in episode_indecies]
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch,labels_batch
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,labels_batch
         else:
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch
+            return frame_batch,measurements_batch,a_history_batch,a_taken_batch
 
         
     def process_batch(self,frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch=None):
@@ -102,7 +102,7 @@ class ExperienceRecorder:
         measurements_batch = np.stack(measurements_batch) #can't clip until we compute target_batch
         target_batch = self.m_to_target(measurements_batch[:,:,-self.num_predict_m:])
         
-        measurements_batch = measurements_batch[:,:-self.clip_n_timesteps,:]
+        measurements_batch = measurements_batch[:,:-self.clip_n_timesteps,:self.num_observe_m]
         target_batch = target_batch[:,:-self.clip_n_timesteps]
         
         l = a_taken_batch.shape[1]
@@ -115,14 +115,14 @@ class ExperienceRecorder:
         target_batch = target_batch[:,mask]
 
         frame_batch = frame_batch.reshape([-1,self.xdim,self.ydim,3])
-        measurements_batch = measurements_batch.reshape([-1, self.num_measurements])
+        measurements_batch = measurements_batch.reshape([-1, self.num_observe_m])
         a_history_batch = a_history_batch.reshape([-1,self.num_buttons])
         a_taken_batch = a_taken_batch.reshape([-1,self.num_action_splits])
         target_batch = target_batch.reshape([-1])
         
         if label_batch is not None:
-            label_batch = np.stack(label_batch)[:,:-self.clip_n_timesteps,:,:,:]
-            label_batch = label_batch[:,mask,:,:,:]
+            label_batch = np.stack(label_batch)[:,:-self.clip_n_timesteps,:,:]
+            label_batch = label_batch[:,mask,:,:]
             label_batch = label_batch.reshape([-1,self.xdim,self.ydim,1])
             return frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch,target_batch
         else:

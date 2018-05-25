@@ -64,7 +64,7 @@ class DoomSimulator:
             self.agent = DoomAgent(args)
             with open('model_stats.csv', 'w') as f:
                 wr = csv.writer(f)
-                wr.writerow(['iter','mdn loss','frame loss','label loss','kl loss'])
+                wr.writerow(['iter','mdn loss','sharpness','frame loss','label loss','kl loss'])
         else:
             raise ValueError('DoomSimulator has no mode, ',str(self.mode),'.')
         
@@ -113,7 +113,9 @@ class DoomSimulator:
                 os.remove(wad_path)
                 os.remove(self.doompath + 'test.txt')
                 os.remove(self.doompath + 'test.old')
+            print('Generating new maps...')
             self.num_maps = self.generator.generate(wad_path,verbose=False)
+            print('Done!')
             #this should work during runtime now
             self.env.set_doom_scenario_path(wad_path)
             self.env.init()
@@ -374,15 +376,15 @@ class DoomSimulator:
                 imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)
                 
     def train(self,size,update_c_n,update_all_n,test_every_n=100,start_step=0):
-        episode=0
         self.env.init()
         training_steps = start_step
+        episode = start_step % 1025
         t = time.time()
         update_all = update_all_n>0
         update_c = update_c_n>0
         while True:
             test = episode % test_every_n == 0
-            episode_buffer,kills,explored,steps,frames = self.play_episode(training_step=training_steps,testing=test,get_frames=True)
+            episode_buffer,kills,explored,steps,_ = self.play_episode(training_step=training_steps,testing=False,get_frames=False)
             self.agent.reset_state()
             training_steps += steps
             print('Episode ',episode,' Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
@@ -398,11 +400,11 @@ class DoomSimulator:
             if update_all:
                 if episode % update_all_n==0 and self.experience_memory.n_episodes>size:
                     batch = self.get_batch(training_steps,size,get_lab=True)
-                    loss,loss_recon,loss_lab,loss_kl,g_n=self.agent.update_all(size,batch,training_steps)
-                    print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n,' loss recon ',loss_recon,
+                    loss,sharp,loss_recon,loss_lab,loss_kl,g_n=self.agent.update_all(size,batch,training_steps)
+                    print('i: ',episode,' loss: ',loss,' sharp ',sharp,' g_n: ',g_n,' loss recon ',loss_recon,
                           ' loss label ',loss_lab,' loss kl ', loss_kl) 
 
-                    savelist = [episode,loss,loss_recon,loss_lab,loss_kl,g_n]
+                    savelist = [episode,loss,sharp,loss_recon,loss_lab,loss_kl,g_n]
 
                     with open('model_stats.csv', 'a') as f:
                         wr = csv.writer(f)
@@ -413,10 +415,10 @@ class DoomSimulator:
                 if episode % update_c_n==0 and self.experience_memory.n_episodes>size:
 
                     batch = self.get_batch(training_steps,size,get_lab=False)
-                    loss_mse,loss_classify,g_n=self.agent.update_c(size,batch,training_steps)
-                    print('i: ',episode,' loss: ',loss_mse,' loss classify',loss_classify,' g_n: ',g_n) 
+                    loss,sharp,g_n=self.agent.update_c(size,batch,training_steps)
+                    print('i: ',episode,' loss: ',loss,'sharp ',sharp,' g_n: ',g_n) 
 
-                    savelist = [episode,loss]
+                    savelist = [episode,loss,sharp]
                     with open('model_stats.csv', 'a') as f:
                         wr = csv.writer(f)
                         wr.writerow(['{:.2f}'.format(x) for x in savelist])
@@ -424,13 +426,18 @@ class DoomSimulator:
                     
             if test:
                 self.agent.save(episode)
-                #_,kills,explored,steps,frames = self.play_episode(training_step=training_steps,testing=True,get_frames=True)
-                #self.agent.reset_state()
-                #print('Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
+                _,kills,explored,steps,frames = self.play_episode(training_step=training_steps,testing=True,get_frames=True)
+                self.agent.reset_state()
+                print('Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
                                     
                 frames = np.array(frames)
                 frames = (frames*255).astype(np.uint8)
                 imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)
+                if self.test_stat_file is not None:
+                    savelist = [episode,kills,explored]
+                    with open(self.test_stat_file, 'a') as teststatfile:
+                        wr = csv.writer(teststatfile)
+                        wr.writerow(['{:.2f}'.format(x) for x in savelist])
               
 
                 

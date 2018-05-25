@@ -7,7 +7,6 @@ args['mode'] = 'train'
 args['model_path'] = '/home/djdev/Documents/Tensorflow/Doom/Training/'
 args['load_model'] = True
 args['load_vae'] = False
-#args['mem_location'] = '/home/ddangelo/Documents/tensorflow models/doom/h5/human_data.h5'
 args['test_stat_file'] = 'agent_test_data.csv'
 args['reset_file'] = False
 
@@ -33,7 +32,7 @@ batch_size = 4
 update_all = 1
 update_c = 0
 test_n = 25
-start_step = 0
+start_step = 100*1025
 
 try:
     simulator.train(batch_size,update_c_n=update_c,update_all_n=update_all,

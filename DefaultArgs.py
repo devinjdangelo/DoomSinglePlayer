@@ -38,13 +38,11 @@ args['episode_length'] = 1024
 args['clip_n_timesteps'] = 256
 args['sequence_length'] = 192
 
-args['reward_weights'] = [1/50,1/16,1/60,1/2,1/20,1/100,2,0.25,2,-10,100]
+args['reward_weights'] = [1/50,1/16,1/60,1/2,1/20,1/100,5,0.5,6,-10,100]
 args['reward_discount_rate'] = .98
 
 #dropout args passed to tf.train.piecewise_constant then dropout layer
-args['exploration'] = 'bayesian' #currently only exploration type implemented. See DoomAgent.choose_action 
-args['dropoutrates'] = [.75,0.5,0.25,0.15,0.1,.05,.01]
-args['dropoutboundaries']= [100000,200000,500000,1000000,2000000,3000000]
+args['exploration'] = 'MDN' #currently only exploration type implemented. See DoomAgent.choose_action 
 
 #TODO make measurements customizable via args
 args['num_measurements'] = 29 #must not be changed without corresponding change to DoomSimulator.process_game_vars
@@ -66,8 +64,12 @@ args['levels_normalization'] = [(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
 #WARNING changing frame_skip changes the meaning of 'step', other args should be adjusted to account for this, e.g. offsets is in num_steps
 args['frame_skip'] = 4 #update DoomAgent.choose_action cooldowns to be dynamic if you want to change to other than 4
 
+args['temp_schedule'] = lambda step : 0.8 * 0.5 ** 2e6
+
+
 args['use_latent_z'] = True
 args['z_dim'] = 256
+args['num_mixtures'] = 16
 
 args['gif_path'] = './gifs'
 
