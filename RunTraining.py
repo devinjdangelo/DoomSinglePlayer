@@ -14,25 +14,23 @@ args['doom_files_path'] = '/home/djdev/Documents/'
 args['doom_engine'] = 'doom2.wad'
 
 #max episodes in RAM
-args['max_episodes'] = 12
+args['max_episodes'] = 14
 
 args['start_lr'] = 3e-3
 args['half_lr_every_n_steps'] = 10e6
 
-args['use_human_data'] = True
+args['use_human_data'] = False
 args['mem_location'] = '/home/djdev/Documents/Tensorflow/Doom/h5/human_data_2min.h5'
 args['probability_draw_human_data'] = lambda step : .95 * 0.8**(step/1e6)
 
-args['dropoutrates'] = None
-args['dropoutboundaries']= None
 
 simulator = DoomSimulator(args)
 
-batch_size = 4
+batch_size = 5
 update_all = 1
 update_c = 0
 test_n = 25
-start_step = 100*1025
+start_step = 50*1025
 
 try:
     simulator.train(batch_size,update_c_n=update_c,update_all_n=update_all,
