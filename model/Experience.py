@@ -16,6 +16,8 @@ class ExperienceRecorder:
     def __init__(self,args):       
         self.sequence_length = args['sequence_length'] if 'sequence_length' in args else None
         self.clip_n_timesteps = args['clip_n_timesteps']
+        self.clip_reward = args['reward_clip']
+        self.subtract_reward = args['reward_subtract']
         self.reward_weights = args['reward_weights']
         self.reward_discount_rate = args['reward_discount_rate']
         
@@ -140,14 +142,12 @@ class ExperienceRecorder:
         m_diff = np.diff(m,axis=1)
         #rewards -> episodes x seq_len + 1
         rewards = np.sum(m_diff * self.reward_weights,axis=2)
-        rewards = np.pad(rewards,((0,0),(2,0)), 'constant', constant_values=0)
+        rewards = np.pad(rewards,((0,0),(1,0)), 'constant', constant_values=0)
         #convert instantaneous rewards to discounted present value of all future and past rewards
         #rewards previously collected are 
         PV = stream_to_PV(rewards,self.reward_discount_rate)
-        #now we get the change for each step in the discounted cumulative reward
-        target = np.diff(PV,axis=1)
-        #outshape -> episodes x seq_len
-        return target
+        PV = np.clip((PV - self.subtract_reward),a_min=-self.clip_reward,a_max=self.clip_reward)
+        return PV
     
                 
     

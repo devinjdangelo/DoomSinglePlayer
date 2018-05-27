@@ -216,7 +216,7 @@ def stream_to_PV(stream,drate):
     t = stream.shape[1]
     e = stream.shape[0]
     def PV(i):
-        dr = ([1]*i) + [(drate**j) for j in range(t-i)]
+        dr = ([0]*i) + [(drate**j) for j in range(t-i)]
         dr = np.tile(dr,e).reshape(e,t)
         return np.sum(np.multiply(stream,dr),axis=1)
     PVs = [PV(i) for i in range(t)]

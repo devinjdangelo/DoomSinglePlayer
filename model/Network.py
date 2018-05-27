@@ -331,11 +331,12 @@ class DFP_Network():
         z = (target - mu)/(sigma + 1e-8)
         z = -tf.square(z)/2
         p = oneDivSqrtTwoPI * (1/(sigma + 1e-8)) * tf.exp(z)
+        p = tf.minimum(p,1)
         p = p * pi_p
         p = tf.reduce_sum(p,axis=1)
         loss = -tf.log(p + 1e-8)
         loss = tf.reduce_mean(loss,axis=0)
-        sharpness = tf.maximum(1-tf.pow(sigma+ 1e-8,tf.constant(0.05,dtype=tf.float32)),tf.constant(0,dtype=tf.float32))
+        sharpness = tf.maximum(1-tf.pow(sigma+ 1e-8,tf.constant(0.1,dtype=tf.float32)),tf.constant(0,dtype=tf.float32))
         sharpness = tf.reduce_mean(tf.reduce_sum(sharpness*pi_p,axis=1)) #I penalize the net for having very sharp PDFs in the mixture (i.e. very low variance is bad)
         return loss, sharpness
                 
