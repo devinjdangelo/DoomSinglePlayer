@@ -2,7 +2,7 @@ from model.Simulator import DoomSimulator
 from DefaultArgs import args
 
 args['mode'] = 'record'
-args['mem_location'] = '/media/ddangelo/sandisk/human_data_2min.h5'
+args['mem_location'] = '/media/ddangelo/sandisk/human_data_1min_d.h5'
 args['test_stat_file'] = 'human_test_data.csv'
 args['reset_file'] = True
 

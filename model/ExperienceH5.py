@@ -31,10 +31,12 @@ class H5ExperienceRecorder(ExperienceRecorder):
             else:
                 self.h5file = tb.open_file(filename, mode='a')
             self.frame = self.h5file.get_node("/","frame")
-            self.lbuffer = self.h5file.get_node("/","lbuffer")
             self.measurements = self.h5file.get_node("/","measurements")
             self.a_history = self.h5file.get_node("/","a_history")
-            self.a_taken = self.h5file.get_node("/","a_taken")
+            self.aidx = self.h5file.get_node("/","aidx")
+            self.a_taken_prob = self.h5file.get_node("/","a_taken_prob")
+            self.state_value = self.h5file.get_node("/","state_value")
+            self.gae = self.h5file.get_node("/","gae")            
 
         except:
             print_exc()
@@ -47,10 +49,12 @@ class H5ExperienceRecorder(ExperienceRecorder):
                 self.h5file = tb.open_file(filename, mode='w', title="Doom Replay Data")
                 root = self.h5file.root 
                 self.frame = self.h5file.create_vlarray(root,'frame',tb.Float32Atom())
-                self.lbuffer = self.h5file.create_vlarray(root,'lbuffer',tb.Float32Atom())
                 self.measurements = self.h5file.create_vlarray(root,'measurements',tb.Float32Atom())
-                self.a_history = self.h5file.create_vlarray(root,'a_history',tb.Int32Atom())
-                self.a_taken = self.h5file.create_vlarray(root,'a_taken',tb.Int32Atom())
+                self.a_history = self.h5file.create_vlarray(root,'a_history',tb.Float32Atom())
+                self.aidx = self.h5file.create_vlarray(root,'aidx',tb.Int32Atom())
+                self.a_taken_prob = self.h5file.create_vlarray(root,'a_taken_prob',tb.Float32Atom())
+                self.state_value = self.h5file.create_vlarray(root,'state_value',tb.Float32Atom())
+                self.gae = self.h5file.create_vlarray(root,'gae',tb.Float32Atom())
                     
             else:
                 raise ValueError("No H5 file loaded. Please load valid h5 file or create a new one")      
@@ -64,25 +68,29 @@ class H5ExperienceRecorder(ExperienceRecorder):
                 except:
                     pass # Was already closed
          
-    def add_data(self,frame,measurments,a_history,a_taken,lbuffer):
+    def add_data(self,frame,measurments,a_history,aidx,a_taken_prob,state_value,gae):
         #vlarray's only accept 1D array, so must reshape
+         
         self.frame.append(frame.reshape(-1)) 
-        self.lbuffer.append(lbuffer.reshape(-1)) 
         self.measurements.append(measurments.reshape(-1)) 
         self.a_history.append(a_history.reshape(-1)) 
-        self.a_taken.append(a_taken.reshape(-1)) 
+        self.aidx.append(aidx.reshape(-1)) 
+        self.a_taken_prob.append(a_taken_prob.reshape(-1)) 
+        self.state_value.append(state_value.reshape(-1))
+        self.gae.append(gae)
         
-    def retrieve_batch(self,episode_indecies,get_lbuff=False):  
-        #reshape 1D array back into proper dims
-        frame_batch = [self.frame[i].reshape(-1,self.xdim,self.ydim,3) for i in episode_indecies]
+        
+            
+    def retrieve_batch(self,episode_indecies):  
+        frame_batch = [self.frame[i].reshape(-1,self.xdim,self.ydim,3)  for i in episode_indecies]
         measurements_batch = [self.measurements[i].reshape(-1,self.num_measurements) for i in episode_indecies]
-        a_history_batch = [self.a_history[i].reshape(-1,self.num_buttons) for i in episode_indecies]
-        a_taken_batch = [self.a_taken[i].reshape(-1,self.num_action_splits) for i in episode_indecies]
-        if get_lbuff:
-            labels_batch = [self.lbuffer[i].reshape(-1,self.xdim,self.ydim,1) for i in episode_indecies]
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,labels_batch
-        else:
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch    
+        a_history_batch = [self.a_history[i].reshape(-1,self.adim)  for i in episode_indecies]
+        aidx_batch = [self.aidx[i].reshape(-1,self.num_groups)  for i in episode_indecies]
+        a_taken_prob_batch = [self.a_taken_prob[i] for i in episode_indecies]
+        state_value_batch = [self.state_value[i] for i in episode_indecies]
+        gae_batch = [self.gae[i] for i in episode_indecies]
+
+        return frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch
 
     
 if __name__=='__main__':

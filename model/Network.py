@@ -6,86 +6,57 @@ from tensorflow.python.keras.layers import LeakyReLU
 import math
 
 
-class DFP_Network():
+class PPO():
     def __init__(self,args):
         
-        self.a_size = args['num_actions']
-        self.num_measurements = [args['num_observe_m']]
-        self.framedim = args['framedims']
-        self.num_action_splits = args['num_action_splits']
-        
-        self.start_lr = args['start_lr']
-        self.half_lr_every_n_steps = args['half_lr_every_n_steps']
-
-        self.num_mixtures = args['num_mixtures']
-               
-        self.use_latent_z = args['use_latent_z'] if 'use_latent_z' in args else False
         self.num_buttons = args['num_buttons']
-        self.sequence_length = args['sequence_length']       
+        self.a_size = [len(actions) for actions in args['group_actions']]
+        self.num_action_splits = args['num_action_splits']
+        self.num_measurements = [args['num_observe_m']]
+        self.framedim = args['framedims']        
+        self.sequence_length = args['episode_length']       
         self.time_steps = tf.placeholder_with_default(self.sequence_length,shape=())
         self.steps = tf.placeholder(shape=(),dtype=tf.int32)
         
-        if self.use_latent_z:
-            self.z_dim = args['z_dim'] if 'z_dim' in args else 32
-            self.z_offsets = args['z_offsets'] if 'z_offsets' in args else[4,32] 
-            self.z_num_offsets = len(self.z_offsets)
-        
+        self.critic_weight = args['critic_weight']
+        self.entropy_weight = args['entropy_weight']
+       
         self._build_net()
         
     def _build_net(self):
         self._build_inputs()
-        self.learning_rate = tf.train.exponential_decay(self.start_lr,self.steps,self.half_lr_every_n_steps,0.5)
-       
-        if self.use_latent_z:
-            #self._build_latent_future_predictor()
-            #self._build_latent_z_train_ops()
-            self._build_VAE_loss_train_ops()
-            
-        with tf.variable_scope("control/output"):
-            self._build_output()
-            self._build_loss_train_ops()
+        
+        with tf.variable_scope("critic"):
+            self._build_critic()
+        with tf.variable_scope("actor"):
+            self._build_actor()
+        
+        self._build_loss_train_ops()
         
     def _build_inputs(self):
-        with tf.variable_scope("control"):
-            self._build_measurements()
-            self._build_action_history()
-            concatlist = [self.in_action3,self.dense_m3]
-            
-        if self.use_latent_z:
-            #are we computing Z from frame or feeding it? True->compute it
-            with tf.variable_scope("VAE"):
-                self.compute_z = tf.placeholder_with_default(True,shape=())
-                
-                def feed_fn():
-                    self.feed_z = tf.placeholder(shape=[None,self.z_dim],dtype=tf.float32)
-                    return self.feed_z,tf.zeros([1]),tf.zeros([1])
-                
-                compute_fn = lambda : self._build_VAE_deconv() #nothing defined within is executed if self.compute_z is False
-                
-                self.latent_z,self.outframe,self.outlabel = tf.cond(self.compute_z,true_fn=compute_fn,false_fn=feed_fn)
-                concatlist.append(self.latent_z)
-        else:
-            with tf.variable_scope("control"):
-                self._build_conv()
-                self.latent_z = fully_connected(self.convout,128,
-                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-                
-                concatlist.append(self.latent_z)
+        self._build_measurements()
+        self._build_action_history()
+        concatlist = [self.in_action3,self.dense_m3]
         
-        with tf.variable_scope("control"):
-            self.merged_input1 = tf.concat(concatlist,1,name="InputMerge")
-            self.merged_input2 = fully_connected(self.merged_input1,256,
-                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-            
-            self.cell =     tf.nn.rnn_cell.BasicLSTMCell(256)
-            rnn_in = tf.reshape(self.merged_input2,[-1,self.time_steps,256])
-            self.c_in = tf.placeholder(shape=[None, self.cell.state_size.c],dtype=tf.float32)
-            self.h_in = tf.placeholder(shape=[None, self.cell.state_size.h], dtype=tf.float32)
-            state_in = tf.contrib.rnn.LSTMStateTuple(self.c_in, self.h_in)
-             
-            self.lstm_outputs, self.lstm_state = tf.nn.dynamic_rnn(self.cell, rnn_in, initial_state=state_in)
-             
-            self.lstm_outputs = tf.reshape(self.lstm_outputs, [-1, 256])   
+        self._build_conv()
+        self.latent_z = fully_connected(self.convout,512,
+        activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+        
+        concatlist.append(self.latent_z)
+
+        self.merged_input1 = tf.concat(concatlist,1,name="InputMerge")
+        #self.merged_input2 = fully_connected(self.merged_input1,256,
+        #    activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+        
+        self.cell =     tf.nn.rnn_cell.BasicLSTMCell(256)
+        rnn_in = tf.reshape(self.merged_input1,[-1,self.time_steps,651])
+        self.c_in = tf.placeholder(shape=[None, self.cell.state_size.c],dtype=tf.float32)
+        self.h_in = tf.placeholder(shape=[None, self.cell.state_size.h], dtype=tf.float32)
+        state_in = tf.contrib.rnn.LSTMStateTuple(self.c_in, self.h_in)
+         
+        self.lstm_outputs, self.lstm_state = tf.nn.dynamic_rnn(self.cell, rnn_in, initial_state=state_in,dtype=tf.float32)
+         
+        self.lstm_outputs = tf.reshape(self.lstm_outputs, [-1, 256])   
                             
     
     def _build_conv(self):
@@ -96,7 +67,7 @@ class DFP_Network():
         self.conv1 = conv2d(activation_fn=LeakyReLU(0.2),
             weights_initializer=he_normal(),
             inputs=self.observation,num_outputs=32,
-            kernel_size=[2,2],stride=[2,2],padding='VALID')
+            kernel_size=[4,4],stride=[4,4],padding='VALID')
         #self.conv1 = tf.layers.batch_normalization(self.conv1,training=self.conv_training)
         self.conv2 = conv2d(activation_fn=LeakyReLU(0.2),
             weights_initializer=he_normal(),
@@ -110,88 +81,14 @@ class DFP_Network():
         #self.conv3 = tf.layers.batch_normalization(self.conv3,training=self.conv_training)
         self.conv4 = conv2d(activation_fn=LeakyReLU(0.2),
             weights_initializer=he_normal(),
-            inputs=self.conv3,num_outputs=256,
+            inputs=self.conv3,num_outputs=128,
             kernel_size=[2,2],stride=[2,2],padding='VALID')
         #self.conv4 = tf.layers.batch_normalization(self.conv4,training=self.conv_training)
-        self.conv5 = conv2d(activation_fn=LeakyReLU(0.2),
-            weights_initializer=he_normal(),
-            inputs=self.conv4,num_outputs=256,
-            kernel_size=[4,4],stride=[2,2],padding='VALID')
+
         #self.conv5 = tf.layers.batch_normalization(self.conv5,training=self.conv_training)
         
-        self.convout = flatten(self.conv5)
-        
-    def _build_VAE_deconv(self):
-        
-        self._build_conv()
-        
-        self.dense_mu =     fully_connected(self.convout,self.z_dim,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        
-        self.dense_sigma =    fully_connected(self.convout,self.z_dim,
-            activation_fn=tf.nn.relu,weights_initializer=he_normal())
-        
-        #mu=0, sigma=1
-        dist = tf.contrib.distributions.Normal(0.0,1.0)
-        
-        self.z_computed = tf.add(self.dense_mu, tf.multiply(self.dense_sigma,dist.sample(sample_shape=tf.shape(self.dense_sigma))))
-        
-        dense_in = fully_connected(self.z_computed,1024,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-        
-        deconv_in = tf.reshape(dense_in,[-1,1,1,1024])
-        
-        self.deconv_1 = conv2d_transpose(activation_fn=LeakyReLU(0.2),
-            weights_initializer=he_normal(),
-            inputs=deconv_in,num_outputs=256,
-            kernel_size=[3,3],stride=[1,1],padding='VALID')
-        
-        #self.deconv_1 = tf.layers.batch_normalization(self.deconv_1,training=self.conv_training)
-        
-        self.deconv_2 = conv2d_transpose(activation_fn=LeakyReLU(0.2),
-            weights_initializer=he_normal(),
-            inputs=self.deconv_1,num_outputs=256,
-            kernel_size=[4,4],stride=[2,2],padding='VALID')
-        
-        #self.deconv_2 = tf.layers.batch_normalization(self.deconv_2,training=self.conv_training)
-        
-        self.deconv_3 = conv2d_transpose(activation_fn=LeakyReLU(0.2),
-            weights_initializer=he_normal(),
-            inputs=self.deconv_2,num_outputs=128,
-            kernel_size=[2,2],stride=[2,2],padding='VALID')
-        
-        #self.deconv_3 = tf.layers.batch_normalization(self.deconv_3,training=self.conv_training)
-        
-        self.deconv_4 = conv2d_transpose(activation_fn=LeakyReLU(0.2),
-            weights_initializer=he_normal(),
-            inputs=self.deconv_3,num_outputs=64,
-            kernel_size=[2,2],stride=[2,2],padding='VALID')
-        
-        #self.deconv_4 = tf.layers.batch_normalization(self.deconv_4,training=self.conv_training)
-        
-        self.deconv_5 = conv2d_transpose(activation_fn=LeakyReLU(0.2),
-            weights_initializer=he_normal(),
-            inputs=self.deconv_4,num_outputs=32,
-            kernel_size=[2,2],stride=[2,2],padding='VALID')
-        
-        #self.deconv_5 = tf.layers.batch_normalization(self.deconv_5,training=self.conv_training)
-        
-        self.deconv_6 = conv2d_transpose(activation_fn=None,
-            weights_initializer=he_normal(),
-            inputs=self.deconv_5,num_outputs=3,
-            kernel_size=[2,2],stride=[2,2],padding='VALID')
-        
-        self.deconv_6l = conv2d_transpose(activation_fn=None,
-            weights_initializer=he_normal(),
-            inputs=self.deconv_5,num_outputs=1,
-            kernel_size=[2,2],stride=[2,2],padding='VALID')
-        
-        self.label = tf.placeholder(shape=[None,self.framedim[0],self.framedim[1],1],dtype=tf.float32)
-        
-        deconv_sigmoid = tf.nn.sigmoid(self.deconv_6l)
-        
-        return self.z_computed,self.deconv_6,deconv_sigmoid
-                
+        self.convout = flatten(self.conv4)
+                        
     def _build_measurements(self):
         with tf.variable_scope("measurements"):           
             self.measurements = tf.placeholder(shape=[None,self.num_measurements[0]],dtype=tf.float32)
@@ -205,212 +102,94 @@ class DFP_Network():
     def _build_action_history(self):
         with tf.variable_scope("action"):  
             self.action_history = tf.placeholder(shape=[None,self.num_buttons],dtype=tf.float32)
-            self.in_action1 = fully_connected(flatten(self.action_history),128,
+            #self.in_action1 = fully_connected(flatten(self.action_history),128,
+            #    activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            #self.in_action2 = fully_connected(self.in_action1,128,
+            #    activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
+            self.in_action3 = self.action_history    
+    
+    def _build_critic(self):
+        self.critic_dense = fully_connected(self.lstm_outputs,128,
                 activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-            self.in_action2 = fully_connected(self.in_action1,128,
-                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())
-            self.in_action3 = fully_connected(self.in_action2,128,
-                activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())  
-        
-    def _build_latent_future_predictor(self):
-        
-        outputdim = self.z_dim*self.z_num_offsets
-        outputdim_as = [outputdim*self.a_size[i] for i in range(self.num_action_splits)]
-        
-        self.z_expectation1 =  fully_connected(self.lstm_outputs,256,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
-        self.z_expectation2 =  fully_connected(self.z_expectation1,outputdim,
-            activation_fn=None,weights_initializer=he_normal())       
-        self.z_expectation2 = tf.reshape(self.z_expectation2,[-1,self.z_num_offsets,self.z_dim])  
-        
-        layer1 = lambda : fully_connected(self.lstm_outputs,256,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
-        
-        
-        def advantage_layer2(i):
-            layer2 = fully_connected(self.z_advantages1[i],outputdim_as[i],
-            activation_fn=None,weights_initializer=he_normal())
-            layer2 = tf.reshape(layer2,[-1,self.a_size[i],self.z_num_offsets,self.z_dim])
-            layer2 = layer2 - tf.reduce_mean(layer2,axis=1,keepdims=True)
-            return layer2
-    
-        self.z_advantages1 = [layer1() for _ in range(self.num_action_splits)]
-        self.z_advantages2 = [advantage_layer2(i) for i in range(self.num_action_splits)]
-        
-        self.z_preds_all = tf.concat([tf.add(advantage,self.z_expectation2) for advantage in self.z_advantages2],axis=1)
-        self.z_preds_all = flatten(self.z_preds_all)
-        
-        self.z_a_chosen = [tf.placeholder(shape=[None,self.a_size[i],self.z_num_offsets,self.z_dim],dtype=tf.float32) for i in range(self.num_action_splits)]
-        self.z_a_pred = [tf.reduce_sum(tf.multiply(self.z_advantages2[i],self.z_a_chosen[i]),axis=1) for i in range(self.num_action_splits)]
-
-        self.z_a_pred.append(self.z_expectation2)
-        self.z_prediction = tf.add_n(self.z_a_pred)
-    
-    
-    def _build_output(self):
-        #We calculate separate expectation and advantage streams, then combine then later
-        #This technique is described in https://arxiv.org/pdf/1511.06581.pdf
-        
-        outputdim = self.num_mixtures*3
-        outputdim_as = [outputdim*self.a_size[i] for i in range(self.num_action_splits)]
-
-        
-        #average expectation accross all actions
-        self.expectation1 =  fully_connected(self.lstm_outputs,256,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
-        
-        self.expectation2 = fully_connected(self.lstm_outputs,outputdim,
-            activation_fn=None,weights_initializer=he_normal())  
-        self.expectation2 = tf.reshape(self.expectation2,[-1,1,16,3])
-        
-        #split actions into functionally seperable groups
-        #e.g. the expectations of movements depend intimately on
-        #combinations of movements (e.g. forward left vs forward right)
-        #but the expectations of movements can be seperated from the outcome
-        #of switching weapons for example. This separation reduces the
-        # number of outputs of the model by an order of magnitude or more
-        #when the number of subactions is large while maintaining the ability
-        #to choose from a large number of actions.
-        
-        layer1 = lambda : fully_connected(self.lstm_outputs,256,
-            activation_fn=LeakyReLU(0.2),weights_initializer=he_normal())     
-        
-        
-        def advantage_layer2(i):
-            #mu, sigma, pi
-            layer2 = fully_connected(self.advantages1[i],outputdim_as[i],
-            activation_fn=None,weights_initializer=he_normal())
-            #batch x (adim * num_mixtures) x 3
-            #batch x adim x num_mixtures x 3
-            layer2 = tf.reshape(layer2,[-1,self.a_size[i],self.num_mixtures,3])
-            layer2 = layer2 - tf.reduce_mean(layer2,axis=1,keepdims=True)
-            layer2 = tf.add(self.expectation2,layer2)
-            return layer2
-        
-        self.advantages1 = [layer1() for _ in range(self.num_action_splits)]
-        self.advantages2 = [advantage_layer2(i) for i in range(self.num_action_splits)]
-        
-        self.a_chosen = [tf.placeholder(shape=[None,self.a_size[i],self.num_mixtures,3],dtype=tf.float32) for i in range(self.num_action_splits)]
-        self.a_pred = [tf.reduce_sum(tf.multiply(self.advantages2[i],self.a_chosen[i]),axis=1) for i in range(self.num_action_splits)]
-
-        #the loss function will apply appropriate activations to these unscaled values
-        self.prediction = tf.add_n(self.a_pred)
-
-        #find best action assumes batch size of 1 at inference time...
-        #i.e. give me best action in current state
-        out = self.advantages2[0][0,:,:,:]
-        for i in range(self.num_action_splits-1):
-            out = tf.expand_dims(out,0)
-            a_next = self.advantages2[i+1][0,:,:,:]
-            a_next = tf.expand_dims(a_next,1)
-            out = tf.add(out,a_next)
-            out = tf.reshape(out,[-1,self.num_mixtures,3])
-
-        mu = out[:,:,0]
-        sigma = tf.nn.relu(out[:,:,1]) 
-        pi = tf.nn.softmax(out[:,:,2])
-
-        self.temp = tf.placeholder_with_default(0.0,shape=())
-        dist = tf.contrib.distributions.Normal(0.0,1.0)
-        mu_shifted = mu + sigma * dist.sample(sample_shape=tf.shape(sigma)) * self.temp
-        expected_value = tf.reduce_sum(tf.multiply(mu_shifted,pi),axis=1)
-        self.best_action = tf.argmax(expected_value,0)
-
-        
-    
-    def MDN_loss(self,target,prediction):
-        #Calculates the loss function for an MDN with prediction and target
-        target = tf.tile(target,[self.num_mixtures])
-        target = tf.reshape(target,[-1,self.num_mixtures])
-        
-        oneDivSqrtTwoPI = 1 / math.sqrt(2*math.pi)
-        mu = prediction[:,:,0]
-        sigma = tf.nn.relu(prediction[:,:,1])
-        pi_p = tf.nn.softmax(prediction[:,:,2])
-        
-        z = (target - mu)/(sigma + 1e-8)
-        z = -tf.square(z)/2
-        p = oneDivSqrtTwoPI * (1/(sigma + 1e-8)) * tf.exp(z)
-        p = tf.minimum(p,1)
-        p = p * pi_p
-        p = tf.reduce_sum(p,axis=1)
-        loss = -tf.log(p + 1e-8)
-        loss = tf.reduce_mean(loss,axis=0)
-        sharpness = tf.maximum(1-tf.pow(sigma+ 1e-8,tf.constant(0.1,dtype=tf.float32)),tf.constant(0,dtype=tf.float32))
-        sharpness = tf.reduce_mean(tf.reduce_sum(sharpness*pi_p,axis=1)) #I penalize the net for having very sharp PDFs in the mixture (i.e. very low variance is bad)
-        return loss, sharpness
                 
-        
-        
-    def _build_loss_train_ops(self):
-        #This is the actual
-        self.target = tf.placeholder(shape=[None],dtype=tf.float32)
+        self.critic_state_value = fully_connected(self.lstm_outputs,1,
+                activation_fn=None,weights_initializer=he_normal())
+                
+    def _build_actor(self):
 
-        self.loss,self.sharpness = self.MDN_loss(self.target,self.prediction)
         
-        self.combined_loss = self.loss + self.sharpness
+        p_layer = lambda size : fully_connected(self.lstm_outputs,size,
+                activation_fn=tf.nn.softmax,weights_initializer=he_normal())
+        probs = [p_layer(size) for size in self.a_size]
+
+        dist_layer = lambda p : tf.distributions.Categorical(probs=p,dtype=tf.int32)
+        self.dists = [dist_layer(p) for p in probs]
         
-        self.trainer_c = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                     beta1=0.95,
-                                     beta2=0.999,
-                                     epsilon = 1e-4)
+        sample_dist = lambda dist : tf.expand_dims(dist.sample(),-1)
+        sampled_actions = [sample_dist(dist) for dist in self.dists]
+
+        best_fn = lambda p : tf.expand_dims(tf.argmax(p,axis=1),-1)
+        best_actions = [best_fn(p) for p in probs]
+        
+        self.sampled_action = tf.concat(sampled_actions,axis=-1)
+        self.best_action = tf.concat(best_actions,axis=-1)
+        
+        #going to need this frozen for use as pi_thetaold(action)
+        self.sampled_action_prob = self.action_prob(self.sampled_action)
+        self.best_action_prob = self.action_prob(self.best_action)
+        
+        self.feed_action = tf.placeholder(shape=[None,self.num_action_splits],dtype=tf.float32)
+        self.feed_action_prob = self.action_prob(self.feed_action)
+    
+    def action_prob(self,action):
+        lg_probs = [self.dists[i].log_prob(action[:,i]) for i in range(self.num_action_splits)]
+        lgprob = tf.add_n(lg_probs) 
+        return lgprob
+                
+                
+    def _build_loss_train_ops(self):
+        self.lgprob_a_pi_old = tf.placeholder(shape=[None],dtype=tf.float32)
+        self.a_taken = tf.placeholder(shape=[None,self.num_action_splits],dtype=tf.float32)
+        #frozen estimate of generalized advantage from old net
+        self.GAE = tf.placeholder(shape=[None],dtype=tf.float32)
+        #frozen estimate of state value using GAE approach, i.e. GAE+V = Q, E[Q] = V 
+        self.old_v_pred = tf.placeholder(shape=[None],dtype=tf.float32)
+        self.returns = tf.placeholder(shape=[None],dtype=tf.float32)
+        self.clip_e = tf.placeholder(shape=(),dtype=tf.float32)
+        
+        newlgprob = self.action_prob(self.a_taken)
+        #newlgprob = tf.Print(newlgprob,[tf.shape(newlgprob)])
+        # e^(lg(new)-lg(old)) = new/old
+        #newlgprob = tf.Print(newlgprob,[newlgprob,self.lgprob_a_pi_old])
+        rt = tf.exp(newlgprob - self.lgprob_a_pi_old)
+        pg_losses1 = -self.GAE * rt
+        pg_losses2 = -self.GAE * tf.clip_by_value(rt,1-self.clip_e,1+self.clip_e)
+        self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses1,pg_losses2))
+        
+        vpred = tf.squeeze(self.critic_state_value)
+        vpredclipped = self.old_v_pred + tf.clip_by_value(tf.squeeze(self.critic_state_value)-self.old_v_pred,-self.clip_e,self.clip_e)
+        vf_losses1 = tf.square(vpred - self.returns)
+        vf_losses2 = tf.square(vpredclipped - self.returns)
+        self.vf_loss = 0.5 * tf.reduce_mean(tf.maximum(vf_losses1,vf_losses2))
+        
+        #again, by assumption of independence the entropy of overall dist is sum of entropies of component dists
+        self.entropy = tf.reduce_mean(tf.add_n([d.entropy() for d in self.dists]))    
+        
+        c_1 = self.critic_weight
+        c_2 = self.entropy_weight
+        self.loss = self.pg_loss - c_2*self.entropy + c_1*self.vf_loss
+        
+        self.learning_rate = tf.placeholder(shape=(),dtype=tf.float32)
+        self.trainer_c = tf.train.AdamOptimizer(learning_rate=self.learning_rate,epsilon = 1e-5)
+                                     #beta1=0.95,
+                                     #beta2=0.999,
+                                     
         
         
         #Get & apply gradients from network
-        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,scope='control')
-        self.gradients = tf.gradients(self.combined_loss,global_vars)
-        grads,self.grad_norms = tf.clip_by_global_norm(self.gradients,1)
+        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        self.gradients = tf.gradients(self.loss,global_vars)
+        grads,self.grad_norms = tf.clip_by_global_norm(self.gradients,0.5)
         self.apply_grads = self.trainer_c.apply_gradients(list(zip(grads,global_vars)))
         
-        loss_all = self.combined_loss*.95 + .05 * self.VAE_loss
-        
-        self.trainer_all = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                             beta1=0.95,
-                             beta2=0.999,
-                             epsilon = 1e-4)
-        
-        
-        global_vars_all = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        self.gradients_all = tf.gradients(loss_all,global_vars_all)
-        grads_all,self.grad_norms_all = tf.clip_by_global_norm(self.gradients_all,1)
-        self.apply_grads_all = self.trainer_all.apply_gradients(list(zip(grads_all,global_vars_all)))
-        
-    def _build_VAE_loss_train_ops(self):
-        
-        self.kl_loss =    tf.reduce_mean(1 + self.dense_sigma - tf.square(self.dense_mu) - tf.exp(self.dense_sigma))
-        self.reconstruction_loss =    tf.losses.mean_squared_error(self.deconv_6,self.observation)
-        #self.label_loss = tf.losses.mean_squared_error(self.deconv_6l,self.label)
-        self.label_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(targets=self.label,logits=self.deconv_6l,pos_weight=20))
-        
-        self.VAE_loss = -0.5 *self.kl_loss + 7*self.reconstruction_loss + 3*self.label_loss
-        
-        VAE_trainer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                     beta1=0.95,
-                                     beta2=0.999,
-                                     epsilon = 1e-4)
-        
-        #update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        
 
-        #Get & apply gradients from network
-        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        gradients = tf.gradients(self.VAE_loss,global_vars)
-        grads,grad_norms = tf.clip_by_global_norm(gradients,1)
-        #with tf.control_dependencies(update_ops):
-        self.VAE_apply_grads = VAE_trainer.apply_gradients(list(zip(grads,global_vars)))
-        
-    def _build_latent_z_train_ops(self):
-        
-        self.z_target = tf.placeholder(shape=[None,self.z_num_offsets,self.z_dim],dtype=tf.float32)
-        self.latent_z_loss = tf.losses.mean_squared_error(self.z_target,self.z_prediction)
-        
-        z_trainer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                     beta1=0.95,
-                                     beta2=0.999,
-                                     epsilon = 1e-4)
-        
-        #Get & apply gradients from network
-        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-        gradients = tf.gradients(self.latent_z_loss,global_vars)
-        grads,grad_norms = tf.clip_by_global_norm(gradients,1)
-        self.z_apply_grads = z_trainer.apply_gradients(list(zip(grads,global_vars)))

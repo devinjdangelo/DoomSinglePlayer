@@ -6,7 +6,7 @@ Created on Mon Apr 23 16:19:09 2018
 """
 
 import numpy as np
-from model.utils import get_targets, gen_random_mask, stream_to_PV
+from model.utils import GAE
 import imageio
 import skimage
 from skimage import color
@@ -15,18 +15,18 @@ class ExperienceRecorder:
     ##Stores experiences in RAM
     def __init__(self,args):       
         self.sequence_length = args['sequence_length'] if 'sequence_length' in args else None
-        self.clip_n_timesteps = args['clip_n_timesteps']
-        self.clip_reward = args['reward_clip']
-        self.subtract_reward = args['reward_subtract']
         self.reward_weights = args['reward_weights']
-        self.reward_discount_rate = args['reward_discount_rate']
+        self.lweight = args['lambda']
+        self.gweight = args['gamma']
+        
+        self.keep_every_n_timesteps = args['keep_every_n_steps']
         
         self.num_predict_m = args['num_predict_m']
         self.num_observe_m = args['num_observe_m']
         self.num_measurements = args['num_measurements']
         self.xdim,self.ydim = args['framedims']
-        self.num_action_splits = args['num_action_splits']
-        self.num_buttons = args['num_buttons']
+        self.adim = args['num_buttons']
+        self.num_groups = args['num_action_splits']
         
         self.max_episodes = args['max_episodes'] if 'max_episodes' in args else None
         
@@ -35,9 +35,11 @@ class ExperienceRecorder:
         self.frame = []
         self.measurements = []
         self.a_history = []
-        self.a_taken = []
+        self.aidx = []
+        self.a_taken_prob = [] #pi_old(a,s)
+        self.state_value = [] #v(s), critic
+        self.gae = []
         self.valid_indecies = []
-        self.lbuffer = []                             
             
     def append_episode(self,episode_buffer):
                
@@ -48,106 +50,97 @@ class ExperienceRecorder:
         frame = np.stack(episode_buffer[:,0])
         measurments = np.stack(episode_buffer[:,1])
         a_history = np.stack(episode_buffer[:,2])
-        a_taken = np.stack(episode_buffer[:,3])
-        lbuffer = np.stack(episode_buffer[:,4])
+        aidx = np.stack(episode_buffer[:,3])
+        a_taken_prob = np.stack(episode_buffer[:,4])
+        state_value = np.stack(episode_buffer[:,5])
+        gae,rewards = self.get_gae(measurments,state_value)
         
-        self.add_data(frame,measurments,a_history,a_taken,lbuffer)
+        self.add_data(frame,measurments,a_history,aidx,a_taken_prob,state_value,gae)
+        return np.sum(rewards)
 
-    def add_data(self,frame,measurments,a_history,a_taken,lbuffer):
+    def add_data(self,frame,measurments,a_history,aidx,a_taken_prob,state_value,gae):
         
         if self.max_episodes is not None:
             if self.n_episodes >= self.max_episodes:
                 self.frame.pop(0)
                 self.measurements.pop(0)
                 self.a_history.pop(0)
-                self.a_taken.pop(0)
-                self.lbuffer.pop(0)
+                self.aidx.pop(0)
+                self.a_taken_prob.pop(0)
+                self.state_value.pop(0)
+                self.gae.pop(0)
         
         self.frame.append(frame) 
         self.measurements.append(measurments) 
         self.a_history.append(a_history) 
-        self.a_taken.append(a_taken) 
-        self.lbuffer.append(lbuffer)
+        self.aidx.append(aidx)
+        self.a_taken_prob.append(a_taken_prob) 
+        self.state_value.append(state_value)
+        self.gae.append(gae)
 
         
-    def get_batch(self,size,get_lbuff=False):
+    def get_batch(self,size):
         #get batch of episodes from recording.
-            
-        episode_indecies = np.random.choice(self.n_episodes, size, replace=False).tolist()
         
-        if not get_lbuff:
-            frame_batch,measurements_batch,a_history_batch,a_taken_batch = self.retrieve_batch(episode_indecies)
-            return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch)
-        else:
-            frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch = self.retrieve_batch(episode_indecies,get_lbuff=True)
-            return self.process_batch(frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch)
+        if len(self.valid_indecies)<size:
+            self.valid_indecies = list(range(self.n_episodes))
+        episode_indecies = np.random.choice(self.valid_indecies, size, replace=False).tolist()
+        self.valid_indecies = [idx for idx in self.valid_indecies if idx not in episode_indecies]
 
         
-    def retrieve_batch(self,episode_indecies,get_lbuff=False):  
+        frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch = self.retrieve_batch(episode_indecies)
+        return self.process_batch(frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch)
+
+
+        
+    def retrieve_batch(self,episode_indecies):  
         frame_batch = [self.frame[i] for i in episode_indecies]
         measurements_batch = [self.measurements[i] for i in episode_indecies]
         a_history_batch = [self.a_history[i] for i in episode_indecies]
-        a_taken_batch = [self.a_taken[i] for i in episode_indecies]
-        if get_lbuff:
-            labels_batch = [self.lbuffer[i] for i in episode_indecies]
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,labels_batch
-        else:
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch
+        aidx_batch = [self.aidx[i] for i in episode_indecies]
+        a_taken_prob_batch = [self.a_taken_prob[i] for i in episode_indecies]
+        state_value_batch = [self.state_value[i] for i in episode_indecies]
+        gae_batch = [self.gae[i] for i in episode_indecies]
+
+        return frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch
 
         
-    def process_batch(self,frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch=None):
+    def process_batch(self,frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch):
+        #clip off last timestep since there is no reward/transition available for that step
+        frame_batch = np.stack(frame_batch)
+        a_taken_prob_batch = np.stack(a_taken_prob_batch)
+        a_history_batch = np.stack(a_history_batch)
+        aidx_batch = np.stack(aidx_batch)
+        state_value_batch = np.stack(state_value_batch).reshape([-1,self.sequence_length+1])
+        gae_batch = np.stack(gae_batch).reshape([-1,self.sequence_length])
+        measurements_batch = np.stack(measurements_batch)     
         
-        frame_batch = np.stack(frame_batch)[:,:-self.clip_n_timesteps,:,:,:]
-        a_history_batch = np.stack(a_history_batch)[:,:-self.clip_n_timesteps,:]
-        a_taken_batch = np.stack(a_taken_batch)[:,:-self.clip_n_timesteps,:]
+        # l = a_taken_batch.shape[1]
+        # offset = np.random.randint(4)
+        # mask = [False]*self.keep_every_n_timesteps
+        # mask[offset] = True
+        # mask = mask*self.sequence_length
+        # #if keep_every_n_timesteps does not exactly divide episode length
+        # #we must chop off the remainder by masking with False
+        # if l>len(mask):
+        #     mask = mask + [False]*(l-len(mask))
         
-        measurements_batch = np.stack(measurements_batch) #can't clip until we compute target_batch
-        target_batch = self.m_to_target(measurements_batch[:,:,-self.num_predict_m:])
-        
-        measurements_batch = measurements_batch[:,:-self.clip_n_timesteps,:self.num_observe_m]
-        target_batch = target_batch[:,:-self.clip_n_timesteps]
-        
-        l = a_taken_batch.shape[1]
-        mask = gen_random_mask(l,self.sequence_length,10)
-        
-        frame_batch = frame_batch[:,mask,:,:,:]
-        a_history_batch = a_history_batch[:,mask,:]
-        a_taken_batch = a_taken_batch[:,mask,:]
-        measurements_batch = measurements_batch[:,mask,:]
-        target_batch = target_batch[:,mask]
+        # frame_batch = frame_batch[:,mask,:,:,:]
+        # a_history_batch = a_history_batch[:,mask,:]
+        # a_taken_batch = a_taken_batch[:,mask,:]
+        # measurements_batch = measurements_batch[:,mask,:]
+        # target_batch = target_batch[:,mask]
 
-        frame_batch = frame_batch.reshape([-1,self.xdim,self.ydim,3])
-        measurements_batch = measurements_batch.reshape([-1, self.num_observe_m])
-        a_history_batch = a_history_batch.reshape([-1,self.num_buttons])
-        a_taken_batch = a_taken_batch.reshape([-1,self.num_action_splits])
-        target_batch = target_batch.reshape([-1])
         
-        if label_batch is not None:
-            label_batch = np.stack(label_batch)[:,:-self.clip_n_timesteps,:,:]
-            label_batch = label_batch[:,mask,:,:]
-            label_batch = label_batch.reshape([-1,self.xdim,self.ydim,1])
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,label_batch,target_batch
-        else:
-            return frame_batch,measurements_batch,a_history_batch,a_taken_batch,target_batch
+        return frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch
         
         
-    def m_to_target(self,m):
-        #converts predict measurements to reward stream and returns the 
-        #first difference in the discounted cumulative reward of the entire episode.
-        
-        #episode x time_step x measurement
-        #m = np.reshape(m,[-1,self.sequence_length,self.num_predict_m])
-        #ammo2,ammo3,ammo4,ammo5,health,armor,self.episode_kills,self.hits,area_explored,self.deaths,self.levels_beat
-        #mdiff shape -> episodes x seq_len - 1 x measurements
-        m_diff = np.diff(m,axis=1)
-        #rewards -> episodes x seq_len + 1
-        rewards = np.sum(m_diff * self.reward_weights,axis=2)
-        rewards = np.pad(rewards,((0,0),(1,0)), 'constant', constant_values=0)
-        #convert instantaneous rewards to discounted present value of all future and past rewards
-        #rewards previously collected are 
-        PV = stream_to_PV(rewards,self.reward_discount_rate)
-        PV = np.clip((PV - self.subtract_reward),a_min=-self.clip_reward,a_max=self.clip_reward)
-        return PV
+    def get_gae(self,m,v):
+        m_diff = np.diff(m[:,-self.num_predict_m:],axis=0)
+        #rewards -> seq_len - 1 
+        rewards = np.sum(m_diff * self.reward_weights,axis=1)
+        gae = GAE(rewards,v,self.gweight,self.lweight)
+        return gae,rewards
     
                 
     
@@ -169,7 +162,7 @@ class ExperienceRecorder:
     
     @property
     def n_episodes(self):
-        return len(self.a_taken)
+        return len(self.a_taken_prob)
                     
     #@property
     #def epoch_progress(self):

@@ -194,32 +194,30 @@ def find_longest_gap(mask,check_for):
   
     
 def merge_batches(batch1,batch2):
-    if len(batch1)==5 and len(batch2)==5:
+    if len(batch1)==7 and len(batch2)==7:
         frames = np.concatenate([batch1[0],batch2[0]])
         m = np.concatenate([batch1[1],batch2[1]])
         ahist = np.concatenate([batch1[2],batch2[2]])
-        ataken = np.concatenate([batch1[3],batch2[3]])
-        target = np.concatenate([batch1[4],batch2[4]])
-        return frames,m,ahist,ataken,target
-    elif len(batch1)==6 and len(batch2)==6:
-        frames = np.concatenate([batch1[0],batch2[0]])
-        m = np.concatenate([batch1[1],batch2[1]])
-        ahist = np.concatenate([batch1[2],batch2[2]])
-        ataken = np.concatenate([batch1[3],batch2[3]])
-        target = np.concatenate([batch1[4],batch2[4]])
-        lbuffer = np.concatenate([batch1[5],batch2[5]])
-        return frames,m,ahist,ataken,target,lbuffer
+        aprob = np.concatenate([batch1[3],batch2[3]])
+        value = np.concatenate([batch1[4],batch2[4]])
+        gae = np.concatenate([batch1[5],batch2[5]])
+        ataken = np.concatenate([batch1[6],batch2[6]])
+        return frames,m,ahist,aprob,value,gae,ataken
     else:
-        raise ValueError('batches are not both of length 5 or 6')
+        raise ValueError('batches are not both of length 7')
         
-def stream_to_PV(stream,drate):
+def stream_to_PV(stream,drate,n_step):
     t = stream.shape[1]
     e = stream.shape[0]
     def PV(i):
-        dr = ([0]*i) + [(drate**j) for j in range(t-i)]
-        dr = np.tile(dr,e).reshape(e,t)
-        return np.sum(np.multiply(stream,dr),axis=1)
-    PVs = [PV(i) for i in range(t)]
+        look_ahead = n_step if i+n_step+1<t else t-i-1
+        dr = [(drate**j) for j in range(look_ahead)] 
+        dr = np.tile(dr,e).reshape(e,look_ahead)
+        return np.sum(np.multiply(stream[:,i+1:i+look_ahead+1],dr),axis=1)
+    PVs = [PV(i) for i in range(t-1)]
+
+    PVs.append(np.zeros([e]))
+
     PVs = np.stack(PVs,axis=1)
     return PVs
     
@@ -240,3 +238,19 @@ def get_pc_target(sbuff,local_means=False):
         targets = np.mean(cropped_diff,axis=(0,2,4))
         
     return targets
+
+    
+def GAE(rewards,values,g,l):
+    #rewards: length timesteps-1 list of rewards recieved from environment
+    #values: length timesteps list of state value estimations from net
+    #g: gamma discount factor
+    #l: lambda discount factor
+    assert(len(rewards)==len(values)-1)
+    tmax = len(rewards)
+    lastadv = 0 
+    GAE = [0] * tmax
+    for t in reversed(range(tmax)):
+        delta = rewards[t] + g * values[t+1] - values[t]
+        GAE[t] = lastadv = delta + g*l*lastadv
+    
+    return GAE
