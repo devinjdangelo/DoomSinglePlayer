@@ -4,30 +4,31 @@ from traceback import print_exc
 
 
 args['mode'] = 'train'
-args['model_path'] = '/home/ddangelo/Documents/Tensorflow/Doom/Training/'
-args['load_model'] = False
-args['test_stat_file'] = 'agent_test_data.csv'
+args['model_path'] = '/home/djdev/Documents/Tensorflow/Doom/Training/'
+args['load_model'] = True
+args['test_stat_file'] = 'agent_test_data3.csv'
 args['reset_file'] = True
 
-args['doom_files_path'] = '/home/ddangelo/Documents/'
+#args['doom_files_path'] = '/home/djdev/Documents/'
+args['doom_files_path'] = '/home/djdev/Documents/'
 args['doom_engine'] = 'doom2.wad'
 
 #max episodes in RAM
-args['max_episodes'] = 4
+args['max_episodes'] = 30
 args['epochs_per_policy'] = 3
 
 
 args['clip_e'] = lambda f : f * 0.1
-args['learning_rate'] = lambda f: f * 2.5e-4
+args['learning_rate'] = lambda f: f * 1.0e-4
 
-args['use_human_data'] = True
-args['mem_location'] = '/media/ddangelo/sandisk/human_data_1min_d.h5'
-args['hsize'] = 1
+args['use_human_data'] = False
+args['mem_location'] = '/home/djdev/Documents/Tensorflow/Doom/h5/human_data_1min_d.h5'
+args['hsize'] = 0
 
 simulator = DoomSimulator(args)
 
-batch_size = 2
-update_c = 4
+batch_size = 15
+update_c = 30
 
 save_n = 100
 test_n = 200

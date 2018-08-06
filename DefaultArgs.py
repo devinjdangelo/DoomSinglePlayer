@@ -34,12 +34,12 @@ group5_cond = lambda a : sum(a)<2
 args['group_cond'] = [group1_cond,group2_cond,group3_cond,group4_cond,group5_cond]
 
 
-args['episode_length'] = 512 #60 seconds
+args['episode_length'] = 512 #90 seconds
 args['keep_every_n_steps'] = 1
 args['sequence_length']  = args['episode_length']//1
 
 #ammo2,ammo3,ammo4,ammo5,health,armor,self.episode_kills,self.hits,area_explored,self.deaths,self.levels_beat
-args['reward_weights'] = [1/200,1/64,1/200,1/20,1/500,1/1000,0.3,0.025,0.1,-0.25,5]
+args['reward_weights'] = [0,0,0,0,0,0,0.3,0.001,0.15,-0.75,5]
 args['lambda'] = .95
 args['gamma'] = .99
 
