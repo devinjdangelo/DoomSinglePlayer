@@ -109,9 +109,10 @@ class DoomSimulator:
         if self.num_maps==0:
             self.env.close()
             #size = random.choice(['micro','tiny','small','regular'])
-            size = random.choice(['micro'])
+            size = random.choice(['micro','tiny'])
+            theme = random.choice(["original", "mostly_original", "epi", "mostly_epi", "bit_mixed", "jumble", "tech", "mostly_tech", "urban", "mostly_urban", "hell", "mostly_hell"])
             self.generator.set_seed(random.randint(1,999))
-            self.generator.set_config({"size": size, "length": "episode","health": "normal",
+            self.generator.set_config({"size": size,"theme":theme, "length": "episode","health": "normal",
                                        "weapons": "sooner","mons":"some"})
             wad_path = self.doompath + 'test.wad'
             with contextlib.suppress(FileNotFoundError):
@@ -408,6 +409,7 @@ class DoomSimulator:
                 if self.using_human_data:
                     valid_idx = list(range(self.hsize*2))
                     human_batch = self.get_batch(training_steps,self.hsize*2,human=True)
+                    training_steps += self.episode_timeout_steps*self.hsize*2
                 for i in range(1,iterations+1):
                     asize = size-self.hsize
                     f = 1 - (i-1)/iterations

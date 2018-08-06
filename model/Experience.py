@@ -70,13 +70,13 @@ class ExperienceRecorder:
                 self.state_value.pop(0)
                 self.gae.pop(0)
         
-        self.frame.append(frame) 
-        self.measurements.append(measurments) 
-        self.a_history.append(a_history) 
-        self.aidx.append(aidx)
-        self.a_taken_prob.append(a_taken_prob) 
-        self.state_value.append(state_value)
-        self.gae.append(gae)
+        self.frame.append(frame.astype(np.float32,copy=False)) 
+        self.measurements.append(measurments.astype(np.float32,copy=False)) 
+        self.a_history.append(a_history.astype(np.float32,copy=False)) 
+        self.aidx.append(aidx.astype(np.float32,copy=False))
+        self.a_taken_prob.append(a_taken_prob.astype(np.float32,copy=False)) 
+        self.state_value.append(np.array(state_value,dtype=np.float32))
+        self.gae.append(np.array(gae,dtype=np.float32))
 
         
     def get_batch(self,size):

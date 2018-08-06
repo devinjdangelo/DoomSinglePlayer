@@ -45,7 +45,7 @@ class DoomAgent:
             ckpt = tf.train.get_checkpoint_state(self.model_path)
             print(ckpt.model_checkpoint_path)
             self.saver.restore(self.sess,ckpt.model_checkpoint_path)
-            #self.saver.restore(self.sess,'/home/djdev/Documents/Tensorflow/Doom/Training/1250.ckpt')
+            #self.saver.restore(self.sess,'/home/djdev/Documents/Tensorflow/Doom/Training/Training8100.ckpt')
         else:
             self.sess.run(tf.global_variables_initializer())
             
@@ -91,7 +91,7 @@ class DoomAgent:
         returns_batch = gae_batch + state_value_batch
         gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
         
-        frame_prepped = np.zeros(frame_batch.shape)
+        frame_prepped = np.zeros(frame_batch.shape,dtype=np.float32)
         frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-18.4)/14.5
         frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-3)/8.05
         frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.30 
