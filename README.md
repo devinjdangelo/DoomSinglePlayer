@@ -1,6 +1,6 @@
 # DoomSinglePlayer
 
-This repo contains the code used to train an agent for the Vizdoom 2018 competition track 1 singleplayer.
+This repo contains the code used to train an agent for the [Vizdoom 2018 competition track 1 singleplayer](http://vizdoom.cs.put.edu.pl/competition-cig-2018/competition-results).
 
 ## Requirements:
 For now, this code assumes you are using two machines one with 8 cores and 1 gpu and another with 4 cores and 1 gpu. This can be updated to other configurations by updating the MPI comm split commands and updating references to ranks 0 and 8 to ranks on which you have GPUs. I intend to make this more dynamic in the future.
