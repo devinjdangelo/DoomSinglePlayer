@@ -17,13 +17,25 @@ from model.ExperienceH5 import H5ExperienceRecorder
 
 from model.utils import *
 
+import horovod.tensorflow as hvd
+hvd.init(comm=[0,8])
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+n_workers = comm.Get_size()
+
 class DoomSimulator:
     def __init__(self,args):
         #valid modes:
         #record -- human player generates training data by playing Doom
         #pretrain -- agent learns from human data and plays test levels regularly to track performance gains
         #train -- agent begins exploring and learning from its own data, plays tests regularly to track performance
-        
+
+        color = 0 if rank<=7 else 1
+        self.local_comm = MPI.COMM_WORLD.Split(color,rank)
+        self.local_workers = self.local_comm.Get_size()
+
         if 'mode' not in args or 'framedims' not in args:
             raise ValueError('Mode and framedims are required arguments for DoomSimulator. \
                              Please add to args.')
@@ -44,7 +56,7 @@ class DoomSimulator:
         if self.test_stat_file is not None and reset_file:
             with open(self.test_stat_file, 'w') as teststatfile:
                     wr = csv.writer(teststatfile)
-                    wr.writerow(['Episode','Kills','Explored','Average Explored','Total Reward','Reward Average'])
+                    wr.writerow(['Episode','Kills','Explored','Wins','Total Reward','Kills Avg','Explore Avg','Wins Avg','Rewards Avg'])
                     
         self.env = DoomGame()
         self.doompath = args['doom_files_path'] 
@@ -105,8 +117,8 @@ class DoomSimulator:
             self.group_actions.append(group_i)
             
         self.group_buttons = a_sizes
-    def start_new_level(self):
-        if self.num_maps==0:
+    def start_new_level(self,won_level=False):
+        if self.num_maps==0 and not won_level:
             self.env.close()
             #size = random.choice(['micro','tiny','small','regular'])
             size = random.choice(['micro','tiny'])
@@ -114,21 +126,29 @@ class DoomSimulator:
             self.generator.set_seed(random.randint(1,999))
             self.generator.set_config({"size": size,"theme":theme, "length": "episode","health": "normal",
                                        "weapons": "sooner","mons":"some"})
-            wad_path = self.doompath + 'test.wad'
+            wad_path = self.doompath + str(rank) + 'test.wad'
             with contextlib.suppress(FileNotFoundError):
                 os.remove(wad_path)
-                os.remove(self.doompath + 'test.txt')
-                os.remove(self.doompath + 'test.old')
+                os.remove(self.doompath + str(rank) +  'test.txt')
+                os.remove(self.doompath + str(rank) + 'test.old')
             print('Generating new maps...')
             self.num_maps = self.generator.generate(wad_path,verbose=False)
+            self.last_map = self.num_maps
             print('Done!')
             #this should work during runtime now
             self.env.set_doom_scenario_path(wad_path)
             self.env.init()
-            self.map=0
-        
-        self.map += 1
-        self.num_maps -= 1
+            self.map = 0
+            self.next_map = 1
+        if won_level:
+            if self.map==self.last_map:
+                self.map = 1
+            else:
+                self.map += 1
+        else:
+            self.map = self.next_map
+            self.next_map += 1
+            self.num_maps -= 1
         strmap = "map{:02}".format(self.map)
         self.env.set_doom_map(strmap)
         self.env.new_episode()
@@ -208,8 +228,8 @@ class DoomSimulator:
                 self.last_hit_n_ago+=1
                 current_kills = max(self.monster_deaths[-1] - self.monster_deaths[-2],0)
                 self.episode_kills += current_kills 
-                if current_kills!=0:
-                    print('You scored, ',current_kills,' kills!')
+                #if current_kills!=0:
+                    #print('You scored, ',current_kills,' kills!')
             
 
         else: 
@@ -251,11 +271,11 @@ class DoomSimulator:
         self.start_new_level()
         state = self.env.get_state()
         s = state.screen_buffer
-        s = s[:-80,:,:] #crop out the HUD
+        s = s[:-25,:,:] #crop out the HUD
         s = skimage.transform.resize(s,(self.xdim,self.ydim,3))
-        s = skimage.color.rgb2lab(s)
+        #s = skimage.color.rgb2lab(s)
 
-        abuffer = np.zeros(self.num_buttons)
+        abuffer = np.zeros(self.num_buttons,dtype=np.int32)
         m = self.process_game_vars(state.game_variables,state.labels)
 
         while not episode_finished:                
@@ -272,7 +292,7 @@ class DoomSimulator:
                 episode_buffer.append([s,m,abuffer,aidx,0,0])
             elif self.mode == 'train' or self.mode=='pretrain':
                 vz_action,aidx,a_prob,state_value = self.agent.choose_action(s,m,abuffer,training_step,testing,self.selected_weapon)
-                self.env.make_action(vz_action,self.frame_skip)    
+                self.env.make_action(vz_action.tolist(),self.frame_skip)    
                 action = vz_action
                 # state, measurements, previous action, prob of chosen action, value of current state
                 episode_buffer.append([s,m,abuffer,aidx,a_prob,state_value])
@@ -281,7 +301,7 @@ class DoomSimulator:
             if self.env.is_episode_finished() and not self.env.is_player_dead():
                 #catch if Vizdoom ended the episode because player completed level 
                 print('you beat the level!')
-                self.start_new_level()
+                self.start_new_level(won_level=True)
                 self.monster_deaths = []
                 self.level_ypos = []
                 self.level_xpos = []
@@ -293,7 +313,7 @@ class DoomSimulator:
                 #do not reinitialize any variable!
                 #no reward for exploring same part of map after respawning... 
                 #kill rewards still count 
-                print('you died! restarting...')
+                #print('you died! restarting...')
                 self.restart_level()
                 self.deaths += 1
                 #self.monster_deaths[-2:] = [0,0]
@@ -306,23 +326,23 @@ class DoomSimulator:
                 m = self.process_game_vars(m_raw,state.labels)          
                 
                 s = state.screen_buffer
-                s = s[:-80,:,:] #crop out the HUD
+                s = s[:-25,:,:] #crop out the HUD
                 s = skimage.transform.resize(s,(self.xdim,self.ydim,3))
                 
                 if get_frames:
                     frames.append(s)
                     
-                s = skimage.color.rgb2lab(s)
+                #s = skimage.color.rgb2lab(s)
                                     
                 abuffer = action
                 
                 if episode_steps > self.episode_timeout_steps:
-                    print('timeout!')
+                    #print('timeout!')
                     episode_finished = True
                         
         
         self.previous_level_explored += self.level_explored[-1]                 
-        return episode_buffer,self.episode_kills,self.previous_level_explored,episode_steps,frames
+        return episode_buffer,self.episode_kills,self.previous_level_explored,episode_steps,frames,self.levels_beat
 
     def record_episodes(self):
         response = input('Ready to start playing? Enter (y) when ready or (n) to abort: ')
@@ -377,54 +397,47 @@ class DoomSimulator:
             msteps_per_day = 60*60*24*steps_per_sec/1000000
             #print('Steps per second',steps_per_sec,' Steps per day ',msteps_per_day,' million')
                 
-    def train(self,size,update_n,start_step=0,save_n=25,test_n=25):
+    def train(self,size,update_n,start_step=0,save_n=25,test_n=25,init_explore=None,init_reward=None,
+                    init_win=None,init_kills=None):
         self.env.init()
         training_steps = start_step
         episode = 0
         t = time.time()
-        explore_avg = 12
-        reward_avg = 0
+        explore_avg = init_explore if init_explore is not None else 20
+        reward_avg = init_reward if init_reward is not None else 2
+        wins_avg = init_win if init_win is not None else 0
+        kills_avg = init_kills if init_kills is not None else 0.3
         while True:
             episode += 1
             save = episode % save_n == 0
-            test = episode % test_n == 0
-            episode_buffer,kills,explored,steps,frames = self.play_episode(training_step=training_steps,testing=test,get_frames=save)
+            test = False
+            episode_buffer,kills,explored,steps,frames,wins = self.play_episode(training_step=training_steps,testing=test,get_frames=save)
             self.agent.reset_state()
-            a_weight = max(1/(episode+1),.0005)
-            explore_avg = (1-a_weight) * explore_avg + a_weight*explored
-            training_steps += steps
-            print('Episode ',episode,' Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
             rewards = self.experience_memory.append_episode(episode_buffer)
-            reward_avg = (1-a_weight) * reward_avg + a_weight*rewards
-            
+            print('Episode ',episode,' Agent scored, ',kills,' kills and explored ',explored,' units over ',steps,' steps or ',steps*4//35,' seconds')
+            rewards,kills,explored,wins = self.sync_performance_stats(rewards,kills,explored,wins)
+
             if self.test_stat_file is not None:
-                savelist = [episode,kills,explored,explore_avg,rewards,reward_avg]
+                a_weight = max(1/(episode+1),1/10000*self.local_workers) if init_explore is None else 1/10000*self.local_workers
+                explore_avg = (1-a_weight) * explore_avg + a_weight*explored
+                training_steps += steps
+                reward_avg = (1-a_weight) * reward_avg + a_weight*rewards
+                wins_avg = (1-a_weight) * wins_avg + a_weight*wins
+                kills_avg = (1-a_weight) * kills_avg + a_weight*kills
+                
+                savelist = [episode,kills,explored,wins,rewards,kills_avg,explore_avg,wins_avg,reward_avg]
                 with open(self.test_stat_file, 'a') as teststatfile:
                     wr = csv.writer(teststatfile)
                     wr.writerow(['{:.4f}'.format(x) for x in savelist])
-                       
-                
-            if episode % update_n==0 and self.experience_memory.n_episodes>=size:
-                iterations = (self.train_epochs * update_n) // size 
-                if self.using_human_data:
-                    valid_idx = list(range(self.hsize*2))
-                    human_batch = self.get_batch(training_steps,self.hsize*2,human=True)
-                    training_steps += self.episode_timeout_steps*self.hsize*2
+                           
+            comm.Barrier()
+            if episode % (update_n//n_workers)==0 and self.experience_memory.n_episodes>=size and (rank==0 or rank==8):
+                iterations = (self.train_epochs * update_n//n_workers*self.local_workers) // size
                 for i in range(1,iterations+1):
-                    asize = size-self.hsize
                     f = 1 - (i-1)/iterations
                     lr = self.lr_schedule(f)
                     clip = self.clip_schedule(f)
-                    abatch = self.get_batch(training_steps,asize)
-                    if self.using_human_data:
-                        if len(valid_idx)<self.hsize:
-                            valid_idx = list(range(self.hsize*2))
-                        idx = np.random.choice(valid_idx,self.hsize,replace=False)
-                        valid_idx = [i for i in valid_idx if i not in idx]                            
-                        human_sub_batch = [b[idx] for b in human_batch]
-                        batch = merge_batches(abatch,human_sub_batch)
-                    else:
-                        batch = abatch
+                    batch = self.get_batch(training_steps,size)
                     ploss,closs,entropy,g_n=self.agent.update(size,batch,training_steps,lr,clip)
                     print('i: ',episode,'policy score: ',ploss,' critic loss ',closs,' entropy ', entropy,' g_n: ',g_n) 
 
@@ -435,28 +448,49 @@ class DoomSimulator:
 
 
             if episode % save_n ==0:
-                self.agent.save(episode)
-                frames = np.array(frames)
-                frames = (frames*255).astype(np.uint8)
-                imageio.mimwrite(self.gif_path+'/testepisode'+str(episode)+'.gif',frames,duration=self.frame_skip/35)            
+                if rank==0:
+                    self.agent.save(episode)
+                    frames = np.array(frames)
+                    frames = (frames*255).astype(np.uint8)
+                    imageio.mimwrite(self.gif_path+'/testepisode'+str(rank)+'r'+str(episode)+'.gif',frames,duration=self.frame_skip/35)            
 
-                
-            steps_per_sec = (training_steps-start_step)//(time.time()-t)
-            msteps_per_day = 60*60*24*steps_per_sec/1000000
-            print('Steps per second',steps_per_sec,' Steps per day ',msteps_per_day,' million')
-                
-    def get_batch(self,steps,size,human=False):
-        if not human:
-            batch = self.experience_memory.get_batch(size)
-        else:
-            human_batch = self.human_data.get_batch(size)
-            #agent evaluates action probabilities and state values using pi_old
-            human_batch = self.agent.evaluate_human_batch(size,human_batch)
-            batch = human_batch
-        
-        return batch
-        
+            if rank==0:    
+                steps_per_sec = (training_steps*n_workers-start_step)//(time.time()-t)
+                msteps_per_day = 60*60*24*steps_per_sec/1000000
+                print('Steps per second',steps_per_sec,' Steps per day ',msteps_per_day,' million')
+            comm.Barrier()
 
+
+    def get_batch(self,size):
+        return self.experience_memory.get_batch(size)
+    
+    def sync_performance_stats(self,rewards,kills,explored,wins):
+        rewards = np.array(rewards,dtype=np.float64)
+        kills = np.array(kills,dtype=np.float64)
+        explored = np.array(explored,dtype=np.float64)
+        wins = np.array(wins,dtype=np.float64)
+        sum_rewards = None
+        sum_kills = None
+        sum_explored = None
+        sum_wins = None 
+        if rank == 0:
+            sum_rewards = np.empty((),dtype=np.float64)
+            sum_kills = np.empty((),dtype=np.float64)
+            sum_explored = np.empty((),dtype=np.float64)
+            sum_wins = np.empty((),dtype=np.float64) 
+
+        self.local_comm.Reduce([rewards,MPI.DOUBLE],[sum_rewards,MPI.DOUBLE],op=MPI.SUM,root=0)
+        self.local_comm.Reduce([kills,MPI.DOUBLE],[sum_kills,MPI.DOUBLE],op=MPI.SUM,root=0)
+        self.local_comm.Reduce([explored,MPI.DOUBLE],[sum_explored,MPI.DOUBLE],op=MPI.SUM,root=0)
+        self.local_comm.Reduce([wins,MPI.DOUBLE],[sum_wins,MPI.DOUBLE],op=MPI.SUM,root=0)
+
+        if rank==0:
+            sum_rewards /= self.local_workers
+            sum_kills /= self.local_workers
+            sum_explored /= self.local_workers
+            sum_wins /= self.local_workers
+
+        return sum_rewards,sum_kills,sum_explored,sum_wins
         
                                    
             

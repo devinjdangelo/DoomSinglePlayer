@@ -11,6 +11,15 @@ import imageio
 import skimage
 from skimage import color
 
+import horovod.tensorflow as hvd
+hvd.init(comm=[0,8])
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+
 class ExperienceRecorder:
     ##Stores experiences in RAM
     def __init__(self,args):       
@@ -30,6 +39,11 @@ class ExperienceRecorder:
         
         self.max_episodes = args['max_episodes'] if 'max_episodes' in args else None
         
+        #here we create a communicator for each node
+        #each node passes vizdoom data to its local GPU for inference
+        color = 0 if rank<=7 else 1
+        self.local_comm = comm.Split(color,rank)
+        
         self.need_to_build_offsets = False
         
         self.frame = []
@@ -47,15 +61,44 @@ class ExperienceRecorder:
         
         episode_buffer = np.reshape(np.array(episode_buffer,dtype=object),[-1,l])
         
-        frame = np.stack(episode_buffer[:,0])
-        measurments = np.stack(episode_buffer[:,1])
-        a_history = np.stack(episode_buffer[:,2])
-        aidx = np.stack(episode_buffer[:,3])
-        a_taken_prob = np.stack(episode_buffer[:,4])
-        state_value = np.stack(episode_buffer[:,5])
+        frame = np.stack(episode_buffer[:,0]).astype(np.float32,copy=False)
+        measurments = np.stack(episode_buffer[:,1]).astype(np.float32,copy=False)
+        a_history = np.stack(episode_buffer[:,2]).astype(np.int32,copy=False)
+        aidx = np.stack(episode_buffer[:,3]).astype(np.int32,copy=False)
+        a_taken_prob = np.stack(episode_buffer[:,4]).astype(np.float32,copy=False)
+        state_value = np.stack(episode_buffer[:,5]).astype(np.float32,copy=False)
         gae,rewards = self.get_gae(measurments,state_value)
-        
-        self.add_data(frame,measurments,a_history,aidx,a_taken_prob,state_value,gae)
+
+        if rank==0:
+            gather_frames = np.empty([size]+list(frame.shape),dtype=np.float32)
+            gather_measurements = np.empty([size]+list(measurments.shape),dtype=np.float32)
+            gather_ahist = np.empty([size]+list(a_history.shape),dtype=np.int32)
+            gather_aidx = np.empty([size]+list(aidx.shape),dtype=np.int32)
+            gather_aprob = np.empty([size]+list(a_taken_prob.shape),dtype=np.float32)
+            gather_val = np.empty([size]+list(state_value.shape),dtype=np.float32)
+            gather_gae = np.empty([size]+list(gae.shape),dtype=np.float32)
+        else:
+            gather_frames = None
+            gather_measurements = None
+            gather_ahist = None
+            gather_aidx = None
+            gather_aprob = None
+            gather_val = None
+            gather_gae = None
+
+        self.local_comm.Gather(frame,gather_frames,root=0)
+        self.local_comm.Gather(measurments,gather_measurements,root=0)
+        self.local_comm.Gather(a_history,gather_ahist,root=0)
+        self.local_comm.Gather(aidx,gather_aidx,root=0)
+        self.local_comm.Gather(a_taken_prob,gather_aprob,root=0)
+        self.local_comm.Gather(state_value,gather_val,root=0)
+        self.local_comm.Gather(gae,gather_gae,root=0)
+
+        if rank==0:
+            for i in range(size): 
+                self.add_data(gather_frames[i,:,:,:,:],gather_measurements[i,:,:],
+                    gather_ahist[i,:,:],gather_aidx[i,:,:],gather_aprob[i,:],
+                    gather_val[i,:],gather_gae[i,:])
         return np.sum(rewards)
 
     def add_data(self,frame,measurments,a_history,aidx,a_taken_prob,state_value,gae):
@@ -140,6 +183,8 @@ class ExperienceRecorder:
         #rewards -> seq_len - 1 
         rewards = np.sum(m_diff * self.reward_weights,axis=1)
         gae = GAE(rewards,v,self.gweight,self.lweight)
+        gae = np.array(gae,dtype=np.float32)
+        rewards = np.array(rewards,dtype=np.float32)
         return gae,rewards
     
                 

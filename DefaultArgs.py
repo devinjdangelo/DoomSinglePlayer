@@ -34,7 +34,7 @@ group5_cond = lambda a : sum(a)<2
 args['group_cond'] = [group1_cond,group2_cond,group3_cond,group4_cond,group5_cond]
 
 
-args['episode_length'] = 512 #90 seconds
+args['episode_length'] = 512 #60 seconds
 args['keep_every_n_steps'] = 1
 args['sequence_length']  = args['episode_length']//1
 

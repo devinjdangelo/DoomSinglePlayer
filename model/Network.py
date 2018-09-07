@@ -3,6 +3,8 @@ from tensorflow.contrib.slim import conv2d, fully_connected, flatten, dropout, c
 from tensorflow.python.keras.initializers import he_normal
 from tensorflow.python.keras.layers import LeakyReLU
 
+import horovod.tensorflow as hvd
+hvd.init(comm=[0,8])
 import math
 
 
@@ -160,13 +162,14 @@ class PPO():
         newlgprob = self.action_prob(self.a_taken)
         #newlgprob = tf.Print(newlgprob,[tf.shape(newlgprob)])
         # e^(lg(new)-lg(old)) = new/old
-        #newlgprob = tf.Print(newlgprob,[newlgprob,self.lgprob_a_pi_old])
+        #newlgprob = tf.Print(newlgprob,[newlgprob,self.lgprob_a_pi_old],summarize=20)
         rt = tf.exp(newlgprob - self.lgprob_a_pi_old)
         pg_losses1 = -self.GAE * rt
         pg_losses2 = -self.GAE * tf.clip_by_value(rt,1-self.clip_e,1+self.clip_e)
         self.pg_loss = tf.reduce_mean(tf.maximum(pg_losses1,pg_losses2))
         
         vpred = tf.squeeze(self.critic_state_value)
+        #vpred = tf.Print(vpred,[vpred,self.old_v_pred],summarize=20)
         vpredclipped = self.old_v_pred + tf.clip_by_value(tf.squeeze(self.critic_state_value)-self.old_v_pred,-self.clip_e,self.clip_e)
         vf_losses1 = tf.square(vpred - self.returns)
         vf_losses2 = tf.square(vpredclipped - self.returns)
@@ -183,13 +186,20 @@ class PPO():
         self.trainer_c = tf.train.AdamOptimizer(learning_rate=self.learning_rate,epsilon = 1e-5)
                                      #beta1=0.95,
                                      #beta2=0.999,
-                                     
+
         
         
         #Get & apply gradients from network
         global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         self.gradients = tf.gradients(self.loss,global_vars)
         grads,self.grad_norms = tf.clip_by_global_norm(self.gradients,0.5)
-        self.apply_grads = self.trainer_c.apply_gradients(list(zip(grads,global_vars)))
+        averaged_gradients = []
+        for grad, var in list(zip(grads,global_vars)):
+            if grad is not None:
+                averaged_gradients.append((hvd.allreduce(grad), var))
+            else:
+                averaged_gradients.append((None, var))
+
+        self.apply_grads = self.trainer_c.apply_gradients(averaged_gradients)
         
 

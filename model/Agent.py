@@ -5,6 +5,16 @@ import imageio
 import skimage
 from skimage import color
 
+import horovod.tensorflow as hvd
+hvd.init(comm=[0,8])
+
+from mpi4py import MPI
+#assert hvd.size() == MPI.COMM_WORLD.Get_size()
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
 
 from model.Network import PPO
 from model.utils import *
@@ -27,33 +37,50 @@ class DoomAgent:
         
         self.num_action_splits = args['num_action_splits']
         self.num_buttons = args['num_buttons'] 
-                               
         self.levels_normalization_factors = args['levels_normalization']
         
-        tf.reset_default_graph()
-        #config = tf.ConfigProto()
-        #config.gpu_options.allow_growth=True
-        self.sess = tf.Session()
-
-        self.net = PPO(args)
         self.reset_state()
-        
-        self.model_path = args['model_path']
-        self.saver = tf.train.Saver(max_to_keep=50,keep_checkpoint_every_n_hours=1)
-        if args['load_model']:
-            print('Loading Model...')
-            ckpt = tf.train.get_checkpoint_state(self.model_path)
-            print(ckpt.model_checkpoint_path)
-            self.saver.restore(self.sess,ckpt.model_checkpoint_path)
-            #self.saver.restore(self.sess,'/home/djdev/Documents/Tensorflow/Doom/Training/Training8100.ckpt')
-        else:
-            self.sess.run(tf.global_variables_initializer())
+
+        #here we create a communicator for each node
+        #each node passes vizdoom data to its local GPU for inference
+        color = 0 if rank<=7 else 1
+        self.local_comm = comm.Split(color,rank)
+        #here we create a commuinicator for just the gpu enabled threads
+        #and just the cpu only threads
+        color = 0 if rank==0 or rank==8 else 1
+        self.gpu_or_cpu_comm = comm.Split(color,rank)
+                        
+        if rank==0 or rank==8:   
+            tf.reset_default_graph()   
+            self.net = PPO(args)  
+            print('done with net')
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth=True
+            #config.gpu_option.visible_device_list = str(hvd.local_rank())
+            self.sess = tf.Session(config=config)
+            self.model_path = args['model_path']
+            self.saver = tf.train.Saver(max_to_keep=50,keep_checkpoint_every_n_hours=1)
+            if args['load_model']:
+                print('Loading Model...')
+                ckpt = tf.train.get_checkpoint_state(self.model_path)
+                print('rank ',rank,' is loading ',ckpt.model_checkpoint_path)
+                self.saver.restore(self.sess,ckpt.model_checkpoint_path)
+                #self.saver.restore(self.sess,'/home/djdev/Documents/Tensorflow/Doom/Training/25000.ckpt')
+            else:
+                if rank==0:
+                    self.sess.run(tf.global_variables_initializer())
+                    self.save('init')
+                #wait for rank0 to init and save
+                self.gpu_or_cpu_comm.Barrier()
+                #then load the weights that were just initialized
+                if rank==8:
+                    self.saver.restore(self.sess,self.model_path+'init.ckpt')
             
         
         
     def reset_state(self):
-        self.c_state = np.zeros((1, self.net.cell.state_size.c), np.float32)
-        self.h_state = np.zeros((1, self.net.cell.state_size.h), np.float32)    
+        self.c_state = np.zeros(256, dtype=np.float32)
+        self.h_state = np.zeros(256, dtype=np.float32)    
         
         self.attack_cooldown = 0
         self.attack_action_in_progress = [0,0]
@@ -92,12 +119,14 @@ class DoomAgent:
         gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
         
         frame_prepped = np.zeros(frame_batch.shape,dtype=np.float32)
-        frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-18.4)/14.5
-        frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-3)/8.05
-        frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.30 
+        frame_prepped[:,:,:,0] = frame_batch[:,:,:,0]/255
+        frame_prepped[:,:,:,1] = frame_batch[:,:,:,1]/255
+        frame_prepped[:,:,:,2] = frame_batch[:,:,:,2]/255
+
         
         c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
         h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
+
                            
         feed_dict = {self.net.observation:frame_prepped,
             self.net.measurements:m_in_prepped,
@@ -120,95 +149,77 @@ class DoomAgent:
                                         self.net.apply_grads],feed_dict=feed_dict)
         return ploss,closs,entropy,g_n
 
-    def evaluate_human_batch(self,batch_size,human_batch):
-        #takes in batch of human data and evaluates chosen actions, computing pi(a_human), value(state), and GAE(human_episode)
-        frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch = human_batch
-        
-        frame_batch = frame_batch.reshape([-1,self.xdim,self.ydim,3])
-        measurements_batch = measurements_batch.reshape([-1, self.num_measurements])
-        a_history_batch = a_history_batch.reshape([-1,self.num_buttons])
-        aidx_batch = aidx_batch.reshape([-1,self.num_action_splits])
-        a_taken_prob_batch = a_taken_prob_batch.reshape([-1])
-        state_value_batch = state_value_batch.reshape([-1])
-        gae_batch = gae_batch.reshape([-1])       
-        
-        m_in_prepped = self.prep_m(measurements_batch[:,:self.num_observe_m],verbose=False)
-        
-        frame_prepped = np.zeros(frame_batch.shape)
-        frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-18.4)/14.5
-        frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-3)/8.05
-        frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.30 
-        
-        c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
-        h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
-        
-                           
-        feed_dict = {self.net.observation:frame_prepped,
-            self.net.measurements:m_in_prepped,
-            self.net.action_history:a_history_batch,
-            self.net.feed_action:aidx_batch,
-            self.net.steps:0,
-            self.net.time_steps:513,
-            self.net.c_in:c_state,
-            self.net.h_in:h_state}
-                
-        a_taken_prob_batch,state_value_batch = self.sess.run([self.net.feed_action_prob,
-                                        self.net.critic_state_value],feed_dict=feed_dict)
-
-        frame_batch= np.reshape(frame_batch,[batch_size,-1,self.xdim,self.ydim,3])
-        measurements_batch = np.reshape(measurements_batch,[batch_size,-1,self.num_measurements])
-        a_history_batch = np.reshape(a_history_batch,[batch_size,-1,self.num_buttons])
-        aidx_batch = np.reshape(aidx_batch,[batch_size,-1,self.num_action_splits])
-        a_taken_prob_batch = np.reshape(a_taken_prob_batch,[batch_size,-1])
-        state_value_batch = np.reshape(state_value_batch,[batch_size,-1])
-                
-        m_diff = np.diff(measurements_batch[:,:,-self.num_predict_m:],axis=1)
-        #rewards -> seq_len - 1 
-        rewards = np.sum(m_diff * self.reward_weights,axis=2)
-        gae_batch = np.reshape(gae_batch,[batch_size,-1])
-
-        for i in range(batch_size):
-            r = rewards[i,:]
-            v = state_value_batch[i,:]
-            gae_batch[i,:] = GAE(r,v,self.gweight,self.lweight)
-            
-        return  frame_batch,measurements_batch,a_history_batch,aidx_batch,a_taken_prob_batch,state_value_batch,gae_batch
-        
 
     def choose_action(self,s,m,ahistory,total_steps,testing,selected_weapon):
                         
-        frame_prepped = np.zeros(s.shape)
-        frame_prepped[:,:,0] = (s[:,:,0]-18.4)/14.5
-        frame_prepped[:,:,1] = (s[:,:,1]-3)/8.05
-        frame_prepped[:,:,2] = (s[:,:,2]-5.11)/13.30 
+        frame_prepped = np.zeros(s.shape,dtype=np.float32)
+        frame_prepped[:,:,0] = s[:,:,0]/255
+        frame_prepped[:,:,1] = s[:,:,1]/255
+        frame_prepped[:,:,2] = s[:,:,2]/255
         
         m_in = m[:self.num_observe_m]
         m_prepped = self.prep_m(m_in)
-                
-        out_tensors = [self.net.lstm_state,self.net.critic_state_value]
-        if not testing:
-            out_tensors = out_tensors + [self.net.sampled_action,self.net.sampled_action_prob]
+        m_prepped = np.squeeze(m_prepped)
+        
+        fbatch = None
+        m_batch = None
+        a_batch = None
+        c_in_batch = None
+        h_in_batch = None
+        
+        if rank==0:
+            fbatch = np.empty([size]+list(frame_prepped.shape),dtype=np.float32)
+            m_batch = np.empty([size]+list(m_prepped.shape),dtype=np.float32)
+            a_batch = np.empty([size]+list(ahistory.shape),dtype=np.int32)
+            c_in_batch = np.empty([size]+list(self.c_state.shape),dtype=np.float32)
+            h_in_batch = np.empty([size]+list(self.h_state.shape),dtype=np.float32)
+        
+        self.local_comm.Gather(frame_prepped,fbatch,root=0)
+        self.local_comm.Gather(m_prepped,m_batch,root=0)
+        self.local_comm.Gather(ahistory,a_batch,root=0)
+        self.local_comm.Gather(self.c_state,c_in_batch,root=0)
+        self.local_comm.Gather(self.h_state,h_in_batch,root=0)
+        
+        if rank==0:
+            out_tensors = [self.net.lstm_state,self.net.critic_state_value]
+            if not testing:
+                out_tensors = out_tensors + [self.net.sampled_action,self.net.sampled_action_prob]
+            else:
+                out_tensors = out_tensors + [self.net.best_action,self.net.best_action_prob]
+    
+    
+            lstm_state,sendvalue,sendaction,sendprob = self.sess.run(out_tensors, 
+            feed_dict={
+            self.net.observation:fbatch,
+            self.net.measurements:m_batch,
+            self.net.action_history:a_batch,
+            self.net.c_in:c_in_batch,
+            self.net.h_in:h_in_batch,
+            self.net.steps:total_steps,
+            self.net.time_steps:1})            
+    
+            c_state, h_state = lstm_state
         else:
-            out_tensors = out_tensors + [self.net.best_action,self.net.best_action_prob]
-
-
-        lstm_state,value,action,prob = self.sess.run(out_tensors, 
-        feed_dict={
-        self.net.observation:[frame_prepped],
-        self.net.measurements:m_prepped,
-        self.net.action_history:[ahistory],
-        self.net.c_in:self.c_state,
-        self.net.h_in:self.h_state,
-        self.net.steps:total_steps,
-        self.net.time_steps:1})            
-
-        self.c_state, self.h_state = lstm_state
-        # x,y,z,theta,a,e -> x,y,jump,theta,attack,switch,use
-        action = action[0]
-        prob = prob[0]
-        value = value[0]
+            c_state = None
+            h_state = None
+            sendvalue = None
+            sendprob = None
+            sendaction = None
+            
+        self.local_comm.Barrier()
+        action = np.empty(5,dtype=np.int32)
+        prob = np.empty(1,dtype=np.float32)
+        value = np.empty(1,dtype=np.float32)
+        self.local_comm.Scatter(sendaction,action,root=0)
+        self.local_comm.Scatter(sendprob,prob,root=0)
+        self.local_comm.Scatter(sendvalue,value,root=0)
+        self.local_comm.Scatter(c_state,self.c_state,root=0)
+        self.local_comm.Scatter(h_state,self.h_state,root=0)
+        
+        
         vz_action = np.concatenate([self.group_actions[i][action[i]] for i in range(len(action))])
-
+        vz_action = vz_action.astype(np.int32,copy=False)
+        
         #print("Net Raw Action", action)
         #print("vizdoom_action",a)
         
@@ -257,7 +268,7 @@ class DoomAgent:
              self.use_cooldown = 6
         #action_array is an action accepted by Vizdoom engine
 
-        return vz_action.tolist(),action,prob,value
+        return vz_action,action,prob,value
 
 
     
@@ -265,7 +276,7 @@ class DoomAgent:
         
         #measurements represent running totals or current value in case of health
         m = np.reshape(m,[-1,self.num_observe_m])
-        mout = np.zeros([m.shape[0],self.num_observe_m])
+        mout = np.zeros([m.shape[0],self.num_observe_m],dtype=np.float32)
         for i in range(self.num_observe_m):
             a,b = self.levels_normalization_factors[i]
             mout[:,i] = (m[:,i]-a)/ b  
