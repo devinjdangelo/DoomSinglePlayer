@@ -1,3 +1,8 @@
+
+#import horovod.tensorflow as hvd
+#hvd.init(comm=[[0,8],[1,2,3,4,5,6,7,9,10,11]])
+
+
 from vizdoom import *
 from oblige import *
 import skimage as skimage
@@ -17,8 +22,6 @@ from model.ExperienceH5 import H5ExperienceRecorder
 
 from model.utils import *
 
-import horovod.tensorflow as hvd
-hvd.init(comm=[0,8])
 from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
@@ -271,9 +274,16 @@ class DoomSimulator:
         self.start_new_level()
         state = self.env.get_state()
         s = state.screen_buffer
-        s = s[:-25,:,:] #crop out the HUD
+        hud_px_height = self.ydim // 5 + 1 #HUD is 1/5th of the frame up from the bottom
+        s = s[:-hud_px_height,:,:] #crop out the HUD
         s = skimage.transform.resize(s,(self.xdim,self.ydim,3))
-        #s = skimage.color.rgb2lab(s)
+        if self.colorspace == 'LAB':
+            s = skimage.color.rgb2lab(s)
+        elif self.colorspace == 'RGB':
+            s = img_as_ubyte(s)
+            s = s.astype(np.float32,copy=False)
+        else:
+            raise ValueError('Color space, ',self.colorspace,' is not defined.')
 
         abuffer = np.zeros(self.num_buttons,dtype=np.int32)
         m = self.process_game_vars(state.game_variables,state.labels)
@@ -326,13 +336,17 @@ class DoomSimulator:
                 m = self.process_game_vars(m_raw,state.labels)          
                 
                 s = state.screen_buffer
-                s = s[:-25,:,:] #crop out the HUD
+                s = s[:-hud_px_height,:,:] #crop out the HUD
                 s = skimage.transform.resize(s,(self.xdim,self.ydim,3))
-                
                 if get_frames:
-                    frames.append(s)
-                    
-                #s = skimage.color.rgb2lab(s)
+                    frames.append(s*255)
+                if self.colorspace == 'LAB':
+                    s = skimage.color.rgb2lab(s)
+                elif self.colorspace == 'RGB':
+                    s = img_as_ubyte(s)
+                    s = s.astype(np.float32,copy=False)
+                else:
+                    raise ValueError('Color space, ',self.colorspace,' is not defined.')
                                     
                 abuffer = action
                 
@@ -433,11 +447,11 @@ class DoomSimulator:
             comm.Barrier()
             if episode % (update_n//n_workers)==0 and self.experience_memory.n_episodes>=size and (rank==0 or rank==8):
                 iterations = (self.train_epochs * update_n//n_workers*self.local_workers) // size
-                for i in range(1,iterations+1):
+                for i in range(1,int(iterations)+1):
                     f = 1 - (i-1)/iterations
                     lr = self.lr_schedule(f)
                     clip = self.clip_schedule(f)
-                    batch = self.get_batch(training_steps,size)
+                    batch = self.get_batch(size)
                     ploss,closs,entropy,g_n=self.agent.update(size,batch,training_steps,lr,clip)
                     print('i: ',episode,'policy score: ',ploss,' critic loss ',closs,' entropy ', entropy,' g_n: ',g_n) 
 
@@ -450,6 +464,7 @@ class DoomSimulator:
             if episode % save_n ==0:
                 if rank==0:
                     self.agent.save(episode)
+                if rank==0 or rank==8:
                     frames = np.array(frames)
                     frames = (frames*255).astype(np.uint8)
                     imageio.mimwrite(self.gif_path+'/testepisode'+str(rank)+'r'+str(episode)+'.gif',frames,duration=self.frame_skip/35)            
@@ -473,7 +488,7 @@ class DoomSimulator:
         sum_kills = None
         sum_explored = None
         sum_wins = None 
-        if rank == 0:
+        if rank == 0 or rank==8:
             sum_rewards = np.empty((),dtype=np.float64)
             sum_kills = np.empty((),dtype=np.float64)
             sum_explored = np.empty((),dtype=np.float64)
@@ -484,7 +499,7 @@ class DoomSimulator:
         self.local_comm.Reduce([explored,MPI.DOUBLE],[sum_explored,MPI.DOUBLE],op=MPI.SUM,root=0)
         self.local_comm.Reduce([wins,MPI.DOUBLE],[sum_wins,MPI.DOUBLE],op=MPI.SUM,root=0)
 
-        if rank==0:
+        if rank==0 or rank==8:
             sum_rewards /= self.local_workers
             sum_kills /= self.local_workers
             sum_explored /= self.local_workers

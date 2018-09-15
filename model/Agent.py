@@ -1,12 +1,13 @@
+#import horovod.tensorflow as hvd
+#hvd.init(comm=[[0,8],[1,2,3,4,5,6,7,9,10,11]])
+
+
 import numpy as np
 import tensorflow as tf
 from vizdoom import *
 import imageio
 import skimage
 from skimage import color
-
-import horovod.tensorflow as hvd
-hvd.init(comm=[0,8])
 
 from mpi4py import MPI
 #assert hvd.size() == MPI.COMM_WORLD.Get_size()
@@ -45,6 +46,8 @@ class DoomAgent:
         #each node passes vizdoom data to its local GPU for inference
         color = 0 if rank<=7 else 1
         self.local_comm = comm.Split(color,rank)
+        self.local_size = self.local_comm.Get_size()
+
         #here we create a commuinicator for just the gpu enabled threads
         #and just the cpu only threads
         color = 0 if rank==0 or rank==8 else 1
@@ -53,7 +56,6 @@ class DoomAgent:
         if rank==0 or rank==8:   
             tf.reset_default_graph()   
             self.net = PPO(args)  
-            print('done with net')
             config = tf.ConfigProto()
             config.gpu_options.allow_growth=True
             #config.gpu_option.visible_device_list = str(hvd.local_rank())
@@ -65,7 +67,7 @@ class DoomAgent:
                 ckpt = tf.train.get_checkpoint_state(self.model_path)
                 print('rank ',rank,' is loading ',ckpt.model_checkpoint_path)
                 self.saver.restore(self.sess,ckpt.model_checkpoint_path)
-                #self.saver.restore(self.sess,'/home/djdev/Documents/Tensorflow/Doom/Training/25000.ckpt')
+                #self.saver.restore(self.sess,'./params/600.ckpt')
             else:
                 if rank==0:
                     self.sess.run(tf.global_variables_initializer())
@@ -119,9 +121,16 @@ class DoomAgent:
         gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
         
         frame_prepped = np.zeros(frame_batch.shape,dtype=np.float32)
-        frame_prepped[:,:,:,0] = frame_batch[:,:,:,0]/255
-        frame_prepped[:,:,:,1] = frame_batch[:,:,:,1]/255
-        frame_prepped[:,:,:,2] = frame_batch[:,:,:,2]/255
+        if self.colorspace == 'RGB':
+            frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0])/255
+            frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1])/255
+            frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2])/255
+        elif self.colorspace == 'LAB':
+            frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-18.4)/14.5
+            frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-3)/8.05
+            frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.3
+        else:
+            raise ValueError('Colorspace, ',self.colorspace,' is undefined')
 
         
         c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
@@ -153,9 +162,16 @@ class DoomAgent:
     def choose_action(self,s,m,ahistory,total_steps,testing,selected_weapon):
                         
         frame_prepped = np.zeros(s.shape,dtype=np.float32)
-        frame_prepped[:,:,0] = s[:,:,0]/255
-        frame_prepped[:,:,1] = s[:,:,1]/255
-        frame_prepped[:,:,2] = s[:,:,2]/255
+        if self.colorspace == 'RGB':
+            frame_prepped[:,:,0] = (s[:,:,0])/255
+            frame_prepped[:,:,1] = (s[:,:,1])/255
+            frame_prepped[:,:,2] = (s[:,:,2])/255
+        elif self.colorspace == 'LAB':
+            frame_prepped[:,:,0] = (s[:,:,0]-18.4)/14.5
+            frame_prepped[:,:,1] = (s[:,:,1]-3)/8.05
+            frame_prepped[:,:,2] = (s[:,:,2]-5.11)/13.3
+        else:
+            raise ValueError('Colorspace, ',self.colorspace,' is undefined')
         
         m_in = m[:self.num_observe_m]
         m_prepped = self.prep_m(m_in)
@@ -167,12 +183,12 @@ class DoomAgent:
         c_in_batch = None
         h_in_batch = None
         
-        if rank==0:
-            fbatch = np.empty([size]+list(frame_prepped.shape),dtype=np.float32)
-            m_batch = np.empty([size]+list(m_prepped.shape),dtype=np.float32)
-            a_batch = np.empty([size]+list(ahistory.shape),dtype=np.int32)
-            c_in_batch = np.empty([size]+list(self.c_state.shape),dtype=np.float32)
-            h_in_batch = np.empty([size]+list(self.h_state.shape),dtype=np.float32)
+        if rank==0 or rank==8:
+            fbatch = np.empty([self.local_size]+list(frame_prepped.shape),dtype=np.float32)
+            m_batch = np.empty([self.local_size]+list(m_prepped.shape),dtype=np.float32)
+            a_batch = np.empty([self.local_size]+list(ahistory.shape),dtype=np.int32)
+            c_in_batch = np.empty([self.local_size]+list(self.c_state.shape),dtype=np.float32)
+            h_in_batch = np.empty([self.local_size]+list(self.h_state.shape),dtype=np.float32)
         
         self.local_comm.Gather(frame_prepped,fbatch,root=0)
         self.local_comm.Gather(m_prepped,m_batch,root=0)
@@ -180,7 +196,7 @@ class DoomAgent:
         self.local_comm.Gather(self.c_state,c_in_batch,root=0)
         self.local_comm.Gather(self.h_state,h_in_batch,root=0)
         
-        if rank==0:
+        if rank==0 or rank==8:
             out_tensors = [self.net.lstm_state,self.net.critic_state_value]
             if not testing:
                 out_tensors = out_tensors + [self.net.sampled_action,self.net.sampled_action_prob]

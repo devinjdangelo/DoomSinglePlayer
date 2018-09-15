@@ -3,9 +3,17 @@ from tensorflow.contrib.slim import conv2d, fully_connected, flatten, dropout, c
 from tensorflow.python.keras.initializers import he_normal
 from tensorflow.python.keras.layers import LeakyReLU
 
-import horovod.tensorflow as hvd
-hvd.init(comm=[0,8])
 import math
+
+from mpi4py import MPI
+rank = MPI.COMM_WORLD.Get_rank()
+
+import horovod.tensorflow as hvd
+
+if rank==0 or rank==8:
+    hvd.init(comm=[0,8])
+else:
+    hvd.init(comm=[1,2,3,4,5,6,7,9,10,11])
 
 
 class PPO():
@@ -69,7 +77,7 @@ class PPO():
         self.conv1 = conv2d(activation_fn=LeakyReLU(0.2),
             weights_initializer=he_normal(),
             inputs=self.observation,num_outputs=32,
-            kernel_size=[4,4],stride=[4,4],padding='VALID')
+            kernel_size=[3,3],stride=[3,3],padding='VALID')
         #self.conv1 = tf.layers.batch_normalization(self.conv1,training=self.conv_training)
         self.conv2 = conv2d(activation_fn=LeakyReLU(0.2),
             weights_initializer=he_normal(),
