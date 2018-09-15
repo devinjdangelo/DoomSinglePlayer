@@ -13,7 +13,9 @@ args = {}
 args['load_h5_into_mem'] = False
 
 #args['mem_location'] = '/home/ddangelo/Documents/tensorflow models/doom/h5/human_data.h5'
-args['framedims'] = (128,128) #note, HUD is rendered and then cropped out and remaining frame is squeezed into these dims
+args['framedims'] = (96,96) #note, HUD is rendered and then cropped out and remaining frame is squeezed into these dims
+args['colorspace'] = 'LAB'
+
 
 # action = <x,y,z,theta,a,e> x,y,z,theta,a,e in R
 args['a_size'] = [6,1,1,1,2]  #must sum to num_buttons 
@@ -39,7 +41,7 @@ args['keep_every_n_steps'] = 1
 args['sequence_length']  = args['episode_length']//1
 
 #ammo2,ammo3,ammo4,ammo5,health,armor,self.episode_kills,self.hits,area_explored,self.deaths,self.levels_beat
-args['reward_weights'] = [0,0,0,0,0,0,0.3,0.001,0.15,-0.75,5]
+args['reward_weights'] = [0,0,0,0,0,0,0.2,0,0.1,-0.2,.7]
 args['lambda'] = .95
 args['gamma'] = .99
 

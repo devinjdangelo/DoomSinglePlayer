@@ -1,8 +1,8 @@
+
 from model.Simulator import DoomSimulator
 from DefaultArgs import args
 from traceback import print_exc
-import horovod.tensorflow as hvd
-hvd.init(comm=[0,8])
+
 #assert hvd.mpi_threads_supported()
 from mpi4py import MPI
 
@@ -19,26 +19,23 @@ args['doom_files_path'] = './doomfiles/'
 args['doom_engine'] = 'doom2.wad'
 
 #max episodes in RAM
-args['max_episodes'] = 16
+args['max_episodes'] = 48
 
 if rank==0:
-    args['test_stat_file'] = 'agent_test_data_node1.csv'
-    args['epochs_per_policy'] = 2
+    args['test_stat_file'] = '/home/djdev/Dropbox/Deep Learning/doom-ppo-mpi-horovod/agent_test_data_node1.csv'
+    args['gif_path'] = '/home/djdev/Dropbox/Deep Learning/doom-ppo-mpi-horovod/gifs'
+    args['epochs_per_policy'] = 3
 elif rank==8:
-    args['test_stat_file'] = 'agent_test_data_node2.csv'
-    #in the interest of maximizing computational effeciency,
-    #we will have to reuse some of the episodes on node 2
-    #an extra time to match the iterations of node 1
-    #this is because node 1 has 8 workers and maximum batch size of 15
-    #node 2 has 4 workers and maximum batch size 10...
-    args['epochs_per_policy'] = 2.7 
+    args['test_stat_file'] = '/home/dmid/Dropbox/Deep Learning/doom-ppo-mpi-horovod/agent_test_data_node2.csv'
+    args['gif_path'] = '/home/dmid/Dropbox/Deep Learning/doom-ppo-mpi-horovod/gifs'
+    args['epochs_per_policy'] = 3
 else:
     args['epochs_per_policy'] = None
     args['test_stat_file'] = None
 
 
 args['clip_e'] = lambda f : f * 0.1
-args['learning_rate'] = lambda f: f * 2.0e-5
+args['learning_rate'] = lambda f: f * 3.0e-4
 
 args['use_human_data'] = False
 args['mem_location'] = '/home/djdev/Documents/Tensorflow/Doom/h5/human_data_1min_d.h5'
@@ -53,13 +50,13 @@ elif rank==8:
 else:
 	batch_size = 0
 
-update_c = 16
-init_explore = 38.67
-init_reward = 5.342
-init_win = 0.0366
-init_kills = 0.3791
+update_c = 48
+init_explore = 11
+init_reward = 1
+init_win = 0.003
+init_kills = 0.09
 
-save_n = 50
+save_n = 200
 test_n = 5000
 start_step = 0
 
