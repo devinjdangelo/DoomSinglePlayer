@@ -5,10 +5,6 @@ Created on Mon Apr 23 16:19:09 2018
 @author: DDAngelo
 """
 
-#import horovod.tensorflow as hvd
-
-#hvd.init(comm=[0,8],[1,2,3,4,5,6,7,9,10,11])
-
 import numpy as np
 from model.utils import GAE
 import imageio
@@ -29,6 +25,7 @@ class ExperienceRecorder:
         self.reward_weights = args['reward_weights']
         self.lweight = args['lambda']
         self.gweight = args['gamma']
+        self.bootstrap = args['bootstrap']
         
         self.keep_every_n_timesteps = args['keep_every_n_steps']
         
@@ -40,12 +37,6 @@ class ExperienceRecorder:
         self.num_groups = args['num_action_splits']
         
         self.max_episodes = args['max_episodes'] if 'max_episodes' in args else None
-        
-        #here we create a communicator for each node
-        #each node passes vizdoom data to its local GPU for inference
-        color = 0 if rank<=7 else 1
-        self.local_comm = comm.Split(color,rank)
-        self.local_size = self.local_comm.Get_size()
         
         self.need_to_build_offsets = False
         
@@ -72,14 +63,14 @@ class ExperienceRecorder:
         state_value = np.stack(episode_buffer[:,5]).astype(np.float32,copy=False)
         gae,rewards = self.get_gae(measurments,state_value)
 
-        if rank==0 or rank==8:
-            gather_frames = np.empty([self.local_size]+list(frame.shape),dtype=np.float32)
-            gather_measurements = np.empty([self.local_size]+list(measurments.shape),dtype=np.float32)
-            gather_ahist = np.empty([self.local_size]+list(a_history.shape),dtype=np.int32)
-            gather_aidx = np.empty([self.local_size]+list(aidx.shape),dtype=np.int32)
-            gather_aprob = np.empty([self.local_size]+list(a_taken_prob.shape),dtype=np.float32)
-            gather_val = np.empty([self.local_size]+list(state_value.shape),dtype=np.float32)
-            gather_gae = np.empty([self.local_size]+list(gae.shape),dtype=np.float32)
+        if rank==0:
+            gather_frames = np.empty([size]+list(frame.shape),dtype=np.float32)
+            gather_measurements = np.empty([size]+list(measurments.shape),dtype=np.float32)
+            gather_ahist = np.empty([size]+list(a_history.shape),dtype=np.int32)
+            gather_aidx = np.empty([size]+list(aidx.shape),dtype=np.int32)
+            gather_aprob = np.empty([size]+list(a_taken_prob.shape),dtype=np.float32)
+            gather_val = np.empty([size]+list(state_value.shape),dtype=np.float32)
+            gather_gae = np.empty([size]+list(gae.shape),dtype=np.float32)
         else:
             gather_frames = None
             gather_measurements = None
@@ -89,16 +80,16 @@ class ExperienceRecorder:
             gather_val = None
             gather_gae = None
 
-        self.local_comm.Gather(frame,gather_frames,root=0)
-        self.local_comm.Gather(measurments,gather_measurements,root=0)
-        self.local_comm.Gather(a_history,gather_ahist,root=0)
-        self.local_comm.Gather(aidx,gather_aidx,root=0)
-        self.local_comm.Gather(a_taken_prob,gather_aprob,root=0)
-        self.local_comm.Gather(state_value,gather_val,root=0)
-        self.local_comm.Gather(gae,gather_gae,root=0)
+        comm.Gather(frame,gather_frames,root=0)
+        comm.Gather(measurments,gather_measurements,root=0)
+        comm.Gather(a_history,gather_ahist,root=0)
+        comm.Gather(aidx,gather_aidx,root=0)
+        comm.Gather(a_taken_prob,gather_aprob,root=0)
+        comm.Gather(state_value,gather_val,root=0)
+        comm.Gather(gae,gather_gae,root=0)
 
-        if rank==0 or rank==8:
-            for i in range(self.local_size): 
+        if rank==0:
+            for i in range(size): 
                 self.add_data(gather_frames[i,:,:,:,:],gather_measurements[i,:,:],
                     gather_ahist[i,:,:],gather_aidx[i,:,:],gather_aprob[i,:],
                     gather_val[i,:],gather_gae[i,:])
@@ -185,7 +176,7 @@ class ExperienceRecorder:
         m_diff = np.diff(m[:,-self.num_predict_m:],axis=0)
         #rewards -> seq_len - 1 
         rewards = np.sum(m_diff * self.reward_weights,axis=1)
-        gae = GAE(rewards,v,self.gweight,self.lweight)
+        gae = GAE(rewards,v,self.gweight,self.lweight,bootstrap=self.bootstrap)
         gae = np.array(gae,dtype=np.float32)
         rewards = np.array(rewards,dtype=np.float32)
         return gae,rewards

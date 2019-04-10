@@ -1,16 +1,11 @@
-#import horovod.tensorflow as hvd
-#hvd.init(comm=[[0,8],[1,2,3,4,5,6,7,9,10,11]])
-
-
 import numpy as np
 import tensorflow as tf
 from vizdoom import *
 import imageio
 import skimage
 from skimage import color
-
 from mpi4py import MPI
-#assert hvd.size() == MPI.COMM_WORLD.Get_size()
+import time
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -40,55 +35,49 @@ class DoomAgent:
         self.num_buttons = args['num_buttons'] 
         self.levels_normalization_factors = args['levels_normalization']
         
+        self.colorspace = args['colorspace']
+        
+        #self.gpu_time = 0
+        #self.sync_time = 0
         self.reset_state()
-
-        #here we create a communicator for each node
-        #each node passes vizdoom data to its local GPU for inference
-        color = 0 if rank<=7 else 1
-        self.local_comm = comm.Split(color,rank)
-        self.local_size = self.local_comm.Get_size()
-
-        #here we create a commuinicator for just the gpu enabled threads
-        #and just the cpu only threads
-        color = 0 if rank==0 or rank==8 else 1
-        self.gpu_or_cpu_comm = comm.Split(color,rank)
                         
-        if rank==0 or rank==8:   
-            tf.reset_default_graph()   
-            self.net = PPO(args)  
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth=True
-            #config.gpu_option.visible_device_list = str(hvd.local_rank())
-            self.sess = tf.Session(config=config)
+        if rank==0:            
+            tf.reset_default_graph()
+            #config = tf.ConfigProto()
+            #config.gpu_options.allow_growth=True
+            self.sess = tf.Session()
+    
+            self.net = PPO(args)            
             self.model_path = args['model_path']
             self.saver = tf.train.Saver(max_to_keep=50,keep_checkpoint_every_n_hours=1)
             if args['load_model']:
                 print('Loading Model...')
                 ckpt = tf.train.get_checkpoint_state(self.model_path)
-                print('rank ',rank,' is loading ',ckpt.model_checkpoint_path)
-                self.saver.restore(self.sess,ckpt.model_checkpoint_path)
-                #self.saver.restore(self.sess,'./params/600.ckpt')
+                restore_file = ckpt.model_checkpoint_path
+                #restore_file = '/home/djdev/Documents/Tensorflow/Doom/Training/2050.ckpt'
+                print(restore_file)
+                #self.saver.restore(self.sess,ckpt.model_checkpoint_path)
+                self.saver.restore(self.sess,restore_file)
             else:
-                if rank==0:
-                    self.sess.run(tf.global_variables_initializer())
-                    self.save('init')
-                #wait for rank0 to init and save
-                self.gpu_or_cpu_comm.Barrier()
-                #then load the weights that were just initialized
-                if rank==8:
-                    self.saver.restore(self.sess,self.model_path+'init.ckpt')
+                self.sess.run(tf.global_variables_initializer())
             
         
         
     def reset_state(self):
-        self.c_state = np.zeros(256, dtype=np.float32)
-        self.h_state = np.zeros(256, dtype=np.float32)    
+        self.c_state = np.zeros(512, dtype=np.float32)
+        self.h_state = np.zeros(512, dtype=np.float32)    
         
         self.attack_cooldown = 0
         self.attack_action_in_progress = [0,0]
         
         self.holding_down_use = 0
         self.use_cooldown = 0
+        
+        #if rank==0:
+            #print("GPU Time ", self.gpu_time," seconds")
+            #print("Sync Time ",self.sync_time," seconds")
+            #self.gpu_time = 0
+            #self.sync_time = 0
         
     def save(self,episode):
         self.saver.save(self.sess,self.model_path+str(episode)+'.ckpt')
@@ -121,17 +110,17 @@ class DoomAgent:
         gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
         
         frame_prepped = np.zeros(frame_batch.shape,dtype=np.float32)
+ 
         if self.colorspace == 'RGB':
-            frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0])/255
-            frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1])/255
-            frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2])/255
+            frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-50)/25
+            frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-50)/25
+            frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-50)/25
         elif self.colorspace == 'LAB':
             frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-18.4)/14.5
             frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-3)/8.05
             frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.3
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
-
         
         c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
         h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
@@ -160,18 +149,19 @@ class DoomAgent:
 
 
     def choose_action(self,s,m,ahistory,total_steps,testing,selected_weapon):
-                        
+        
         frame_prepped = np.zeros(s.shape,dtype=np.float32)
         if self.colorspace == 'RGB':
-            frame_prepped[:,:,0] = (s[:,:,0])/255
-            frame_prepped[:,:,1] = (s[:,:,1])/255
-            frame_prepped[:,:,2] = (s[:,:,2])/255
+            frame_prepped[:,:,0] = (s[:,:,0]-50)/25
+            frame_prepped[:,:,1] = (s[:,:,1]-50)/25
+            frame_prepped[:,:,2] = (s[:,:,2]-50)/25
         elif self.colorspace == 'LAB':
             frame_prepped[:,:,0] = (s[:,:,0]-18.4)/14.5
             frame_prepped[:,:,1] = (s[:,:,1]-3)/8.05
             frame_prepped[:,:,2] = (s[:,:,2]-5.11)/13.3
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
+            
         
         m_in = m[:self.num_observe_m]
         m_prepped = self.prep_m(m_in)
@@ -183,27 +173,30 @@ class DoomAgent:
         c_in_batch = None
         h_in_batch = None
         
-        if rank==0 or rank==8:
-            fbatch = np.empty([self.local_size]+list(frame_prepped.shape),dtype=np.float32)
-            m_batch = np.empty([self.local_size]+list(m_prepped.shape),dtype=np.float32)
-            a_batch = np.empty([self.local_size]+list(ahistory.shape),dtype=np.int32)
-            c_in_batch = np.empty([self.local_size]+list(self.c_state.shape),dtype=np.float32)
-            h_in_batch = np.empty([self.local_size]+list(self.h_state.shape),dtype=np.float32)
+        if rank==0:
+            fbatch = np.empty([size]+list(frame_prepped.shape),dtype=np.float32)
+            m_batch = np.empty([size]+list(m_prepped.shape),dtype=np.float32)
+            a_batch = np.empty([size]+list(ahistory.shape),dtype=np.int32)
+            c_in_batch = np.empty([size]+list(self.c_state.shape),dtype=np.float32)
+            h_in_batch = np.empty([size]+list(self.h_state.shape),dtype=np.float32)
         
-        self.local_comm.Gather(frame_prepped,fbatch,root=0)
-        self.local_comm.Gather(m_prepped,m_batch,root=0)
-        self.local_comm.Gather(ahistory,a_batch,root=0)
-        self.local_comm.Gather(self.c_state,c_in_batch,root=0)
-        self.local_comm.Gather(self.h_state,h_in_batch,root=0)
+        #comm.Barrier()
+        #st = time.time()
+        comm.Gather(frame_prepped,fbatch,root=0)
+        comm.Gather(m_prepped,m_batch,root=0)
+        comm.Gather(ahistory,a_batch,root=0)
+        comm.Gather(self.c_state,c_in_batch,root=0)
+        comm.Gather(self.h_state,h_in_batch,root=0)
+        #self.sync_time += time.time() - st
         
-        if rank==0 or rank==8:
+        if rank==0:
             out_tensors = [self.net.lstm_state,self.net.critic_state_value]
             if not testing:
                 out_tensors = out_tensors + [self.net.sampled_action,self.net.sampled_action_prob]
             else:
                 out_tensors = out_tensors + [self.net.best_action,self.net.best_action_prob]
     
-    
+            #gt = time.time()
             lstm_state,sendvalue,sendaction,sendprob = self.sess.run(out_tensors, 
             feed_dict={
             self.net.observation:fbatch,
@@ -212,7 +205,9 @@ class DoomAgent:
             self.net.c_in:c_in_batch,
             self.net.h_in:h_in_batch,
             self.net.steps:total_steps,
-            self.net.time_steps:1})            
+            self.net.time_steps:1})       
+            
+            #self.gpu_time += time.time() - gt
     
             c_state, h_state = lstm_state
         else:
@@ -222,15 +217,17 @@ class DoomAgent:
             sendprob = None
             sendaction = None
             
-        self.local_comm.Barrier()
+        #comm.Barrier()
         action = np.empty(5,dtype=np.int32)
         prob = np.empty(1,dtype=np.float32)
         value = np.empty(1,dtype=np.float32)
-        self.local_comm.Scatter(sendaction,action,root=0)
-        self.local_comm.Scatter(sendprob,prob,root=0)
-        self.local_comm.Scatter(sendvalue,value,root=0)
-        self.local_comm.Scatter(c_state,self.c_state,root=0)
-        self.local_comm.Scatter(h_state,self.h_state,root=0)
+        #st = time.time()
+        comm.Scatter(sendaction,action,root=0)
+        comm.Scatter(sendprob,prob,root=0)
+        comm.Scatter(sendvalue,value,root=0)
+        comm.Scatter(c_state,self.c_state,root=0)
+        comm.Scatter(h_state,self.h_state,root=0)
+        #self.sync_time += time.time()- st
         
         
         vz_action = np.concatenate([self.group_actions[i][action[i]] for i in range(len(action))])
@@ -241,51 +238,50 @@ class DoomAgent:
         
 
         if self.attack_cooldown>0:
-            vz_action[9:11] = self.attack_action_in_progress
-            self.attack_cooldown -= 1
-
+           #vz_action[9:11] = self.attack_action_in_progress
+           self.attack_cooldown -= 1
         else:
-            self.attack_action_in_progress = vz_action[9:11]
+           self.attack_action_in_progress = vz_action[9:11]
 
-            if vz_action[10]==1:
-                self.attack_cooldown = 8  #on the 9th step after pressing switch weapons, the agent will actually fire if fire is pressed
-            elif vz_action[9]==1:
-                if selected_weapon==1:
-                    self.attack_cooldown = 3
-                elif selected_weapon==2:
-                    self.attack_cooldown = 3
-                elif selected_weapon==3:
-                    self.attack_cooldown = 7
-                elif selected_weapon==4:
-                    self.attack_cooldown = 1
-                elif selected_weapon==5:
-                    self.attack_cooldown = 4
-                elif selected_weapon==6:
-                    self.attack_cooldown = 1
-                elif selected_weapon==7:
-                    self.attack_cooldown = 9
-                elif selected_weapon==8:
-                    self.attack_cooldown = 13
-                elif selected_weapon==9:
-                    self.attack_cooldown = 0
-                    
-            else:
-                self.attack_cooldown = 0
-                
-        if self.holding_down_use==1:
-            if self.use_cooldown>0:
-                vz_action[8]==0
-                self.use_cooldown -= 1
-            else:
-                self.holding_down_use=0
-                vz_action[8]=0
-        elif vz_action[8]==1:
-             self.holding_down_use=1
-             self.use_cooldown = 6
+           if vz_action[10]==1:
+               self.attack_cooldown = 8  #on the 9th step after pressing switch weapons, the agent will actually fire if fire is pressed
+           elif vz_action[9]==1:
+               if selected_weapon==1:
+                   self.attack_cooldown = 3
+               elif selected_weapon==2:
+                   self.attack_cooldown = 3
+               elif selected_weapon==3:
+                   self.attack_cooldown = 7
+               elif selected_weapon==4:
+                   self.attack_cooldown = 1
+               elif selected_weapon==5:
+                   self.attack_cooldown = 4
+               elif selected_weapon==6:
+                   self.attack_cooldown = 1
+               elif selected_weapon==7:
+                   self.attack_cooldown = 9
+               elif selected_weapon==8:
+                   self.attack_cooldown = 13
+               elif selected_weapon==9:
+                   self.attack_cooldown = 0
+                   
+           else:
+               self.attack_cooldown = 0
+#                
+#        if self.holding_down_use==1:
+#            if self.use_cooldown>0:
+#                vz_action[8]==0
+#                self.use_cooldown -= 1
+#            else:
+#                self.holding_down_use=0
+#                vz_action[8]=0
+#        elif vz_action[8]==1:
+#             self.holding_down_use=1
+#             self.use_cooldown = 6
         #action_array is an action accepted by Vizdoom engine
 
-        return vz_action,action,prob,value
-
+        attacking = self.attack_action_in_progress[0]==1
+        return vz_action,action,prob,value,attacking
 
     
     def prep_m(self,m,verbose=False):

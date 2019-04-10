@@ -1,6 +1,5 @@
 import numpy as np
 import random
-import matplotlib.pyplot as plt
 import scipy.misc
 import os
 import csv
@@ -57,7 +56,7 @@ def compute_circles_visited(xcords,ycords,verbose=False):
      #it will reward the agent based on the total area
      #explored. this will be imputed using the xy cordinates
      #mindistance is in map units... 256 is approx 2x the width of a normal hallway
-     mindistance = 128 
+     mindistance = 256 
      #A = (mindistance/2)**2 * 3.14 #circles of radius 1/2 mindistance
      mindistance = mindistance**2 #distance is squared so we don't have to square root in distance formula
         
@@ -240,13 +239,16 @@ def get_pc_target(sbuff,local_means=False):
     return targets
 
     
-def GAE(rewards,values,g,l):
+def GAE(rewards,values,g,l,bootstrap=False):
     #rewards: length timesteps-1 list of rewards recieved from environment
     #values: length timesteps list of state value estimations from net
     #g: gamma discount factor
     #l: lambda discount factor
+    #bootstrap: if true, bootstrap estimated return after episode timeout (approximates continuing rather than episodic version of problem)
     assert(len(rewards)==len(values)-1)
     tmax = len(rewards)
+    if bootstrap:
+          rewards[-1] = rewards[-1] + g*values[-1]
     lastadv = 0 
     GAE = [0] * tmax
     for t in reversed(range(tmax)):
