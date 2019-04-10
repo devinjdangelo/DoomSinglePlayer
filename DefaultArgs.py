@@ -13,8 +13,8 @@ args = {}
 args['load_h5_into_mem'] = False
 
 #args['mem_location'] = '/home/ddangelo/Documents/tensorflow models/doom/h5/human_data.h5'
-args['framedims'] = (96,96) #note, HUD is rendered and then cropped out and remaining frame is squeezed into these dims
-args['colorspace'] = 'LAB'
+args['framedims'] = (84,84) #note, HUD is rendered and then cropped out and remaining frame is squeezed into these dims
+args['colorspace'] = 'RGB'
 
 
 # action = <x,y,z,theta,a,e> x,y,z,theta,a,e in R
@@ -40,20 +40,21 @@ args['episode_length'] = 512 #60 seconds
 args['keep_every_n_steps'] = 1
 args['sequence_length']  = args['episode_length']//1
 
-#ammo2,ammo3,ammo4,ammo5,health,armor,self.episode_kills,self.hits,area_explored,self.deaths,self.levels_beat
-args['reward_weights'] = [0,0,0,0,0,0,0.2,0,0.1,-0.2,.7]
+#has_key,ammo2,ammo3,ammo4,ammo5,health,armor,self.episode_kills,self.hits,area_explored,self.deaths,self.levels_beat
+args['reward_weights'] = [1,0,0,0,0,0,0,0,0,0.15,-0.2,3]
 args['lambda'] = .95
 args['gamma'] = .99
+args['bootstrap'] = False
 
 #TODO make measurements customizable via args
-args['num_measurements'] = 29 #must not be changed without corresponding change to DoomSimulator.process_game_vars
-args['num_observe_m'] = 24 #agent observe the first e.g. 24 measurements (normalized by levels_normalization)
-args['num_predict_m'] = 11 #used in reward function
+args['num_measurements'] = 30 #must not be changed without corresponding change to DoomSimulator.process_game_vars
+args['num_observe_m'] = 25 #agent observe the first e.g. 24 measurements (normalized by levels_normalization)
+args['num_predict_m'] = 12 #used in reward function
 
 #normalizations tuples (a,b) correspond to the tranformation (m-a)/b ->z score with mean a and sd b
 #where m is the measurement at the same index as the tuple.
 #this is used to normalize measurments to rough standard range [-1 to 1] or [0 to 1] as desired.
-args['levels_normalization'] = [(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
+args['levels_normalization'] = [(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
                                 (0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1),
                                 (0,1),(0,1),(50,50),(10,10),(55,55),(2,2),(50,50),(50,50)] 
 
@@ -70,7 +71,6 @@ args['entropy_weight'] = .01
 args['frame_skip'] = 4 #update DoomAgent.choose_action cooldowns to be dynamic if you want to change to other than 4
 
 
-args['gif_path'] = './gifs'
 
 
 
