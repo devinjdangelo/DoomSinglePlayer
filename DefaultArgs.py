@@ -36,7 +36,7 @@ group5_cond = lambda a : sum(a)<2
 args['group_cond'] = [group1_cond,group2_cond,group3_cond,group4_cond,group5_cond]
 
 
-args['episode_length'] = 512 #60 seconds
+args['episode_length'] = 512 #35 seconds
 args['keep_every_n_steps'] = 1
 args['sequence_length']  = args['episode_length']//1
 
@@ -44,7 +44,7 @@ args['sequence_length']  = args['episode_length']//1
 args['reward_weights'] = [1,0,0,0,0,0,0,0,0,0.15,-0.2,3]
 args['lambda'] = .95
 args['gamma'] = .99
-args['bootstrap'] = False
+args['bootstrap'] = True
 
 #TODO make measurements customizable via args
 args['num_measurements'] = 30 #must not be changed without corresponding change to DoomSimulator.process_game_vars

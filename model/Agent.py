@@ -6,6 +6,7 @@ import skimage
 from skimage import color
 from mpi4py import MPI
 import time
+from math import ceil
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -36,6 +37,8 @@ class DoomAgent:
         self.levels_normalization_factors = args['levels_normalization']
         
         self.colorspace = args['colorspace']
+        self.gpu_size = args['gpu_size']
+        self.sequence_length = args['episode_length'] 
         
         #self.gpu_time = 0
         #self.sync_time = 0
@@ -51,15 +54,23 @@ class DoomAgent:
             self.model_path = args['model_path']
             self.saver = tf.train.Saver(max_to_keep=50,keep_checkpoint_every_n_hours=1)
             if args['load_model']:
+                self.sess.run(tf.global_variables_initializer())
                 print('Loading Model...')
                 ckpt = tf.train.get_checkpoint_state(self.model_path)
                 restore_file = ckpt.model_checkpoint_path
-                #restore_file = '/home/djdev/Documents/Tensorflow/Doom/Training/2050.ckpt'
+                #restore_file = '/home/ddangelo/Documents/Tensorflow/doom-ckpts/21400.ckpt'
+
+                variables_can_be_restored = self.net.intersect_vars(restore_file)
+                tempsaver = tf.train.Saver(variables_can_be_restored)
+                tempsaver.restore(self.sess,restore_file)
+
                 print(restore_file)
                 #self.saver.restore(self.sess,ckpt.model_checkpoint_path)
-                self.saver.restore(self.sess,restore_file)
+                #self.saver.restore(self.sess,restore_file)
             else:
                 self.sess.run(tf.global_variables_initializer())
+                
+
             
         
         
@@ -106,8 +117,7 @@ class DoomAgent:
         
         m_in_prepped = self.prep_m(measurements_batch[:,:self.num_observe_m],verbose=False)
         
-        returns_batch = gae_batch + state_value_batch
-        gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
+
         
         frame_prepped = np.zeros(frame_batch.shape,dtype=np.float32)
  
@@ -122,30 +132,108 @@ class DoomAgent:
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
         
-        c_state = np.zeros((batch_size, self.net.cell.state_size.c), np.float32)
-        h_state = np.zeros((batch_size, self.net.cell.state_size.h), np.float32) 
+        gather_frame_prepped = None
+        gather_m_in_prepped = None
+        gather_a_history_batch = None
+        gather_aidx_batch = None
+        gather_a_taken_prob_batch = None
+        gather_state_value_batch = None
+        gather_gae_batch = None
+        
+        if rank==0:
+            gather_frame_prepped = np.empty([size]+list(frame_prepped.shape),dtype=np.float32)
+            gather_m_in_prepped = np.empty([size]+list(m_in_prepped.shape),dtype=np.float32)
+            gather_a_history_batch = np.empty([size]+list(a_history_batch.shape),dtype=np.float32)
+            gather_aidx_batch = np.empty([size]+list(aidx_batch.shape),dtype=np.float32)
+            gather_a_taken_prob_batch = np.empty([size]+list(a_taken_prob_batch.shape),dtype=np.float32)
+            gather_state_value_batch = np.empty([size]+list(state_value_batch.shape),dtype=np.float32)
+            gather_gae_batch = np.empty([size]+list(gae_batch.shape),dtype=np.float32)
 
-                           
-        feed_dict = {self.net.observation:frame_prepped,
-            self.net.measurements:m_in_prepped,
-            self.net.action_history:a_history_batch,
-            self.net.lgprob_a_pi_old:a_taken_prob_batch,
-            self.net.a_taken:aidx_batch,
-            self.net.returns:returns_batch,
-            self.net.old_v_pred:state_value_batch,
-            self.net.GAE:gae_batch,
-            self.net.learning_rate:lr,
-            self.net.clip_e:clip,
-            self.net.steps:steps,
-            self.net.c_in:c_state,
-            self.net.h_in:h_state}
+        comm.Gather(frame_prepped,gather_frame_prepped,root=0)
+        comm.Gather(m_in_prepped,gather_m_in_prepped,root=0)
+        comm.Gather(a_history_batch,gather_a_history_batch,root=0)
+        comm.Gather(aidx_batch,gather_aidx_batch,root=0)
+        comm.Gather(a_taken_prob_batch,gather_a_taken_prob_batch,root=0)
+        comm.Gather(state_value_batch,gather_state_value_batch,root=0)
+        comm.Gather(gae_batch,gather_gae_batch,root=0)
+        
+        if rank==0:
+            batch_size = batch_size*size
+            frame_prepped = gather_frame_prepped
+            m_in_prepped = gather_m_in_prepped
+            a_history_batch = gather_a_history_batch
+            aidx_batch = gather_aidx_batch
+            a_taken_prob_batch = gather_a_taken_prob_batch
+            state_value_batch = gather_state_value_batch
+            gae_batch = gather_gae_batch
+            
+            frame_prepped = frame_prepped.reshape([-1,self.xdim,self.ydim,3])
+            m_in_prepped = m_in_prepped.reshape([-1, self.num_observe_m])
+            a_history_batch = a_history_batch.reshape([-1,self.num_buttons])
+            aidx_batch = aidx_batch.reshape([-1,self.num_action_splits])
+            a_taken_prob_batch = a_taken_prob_batch.reshape([-1])
+            state_value_batch = state_value_batch.reshape([-1])
+            gae_batch = gae_batch.reshape([-1])
+            
+            returns_batch = gae_batch + state_value_batch
+            gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
+            
+            c_state = np.zeros((self.gpu_size, self.net.cell.state_size.c), np.float32)
+            h_state = np.zeros((self.gpu_size, self.net.cell.state_size.h), np.float32) 
+            
+            if batch_size >= self.gpu_size:
+                n_gpu_feeds = ceil(batch_size / self.gpu_size)
+            else:
+                raise ValueError('Gpu Batch Size cannot be larger than Batch Size')
                 
-        ploss,closs,entropy,g_n,_ = self.sess.run([self.net.pg_loss,
-                                        self.net.vf_loss,
-                                        self.net.entropy,
-                                        self.net.grad_norms,
-                                        self.net.apply_grads],feed_dict=feed_dict)
-        return ploss,closs,entropy,g_n
+            plossavg,clossavg,entropyavg = 0,0,0
+            self.sess.run(self.net.zero_grads)
+            for i in range(n_gpu_feeds):
+                if i == n_gpu_feeds - 1:
+                    start = (batch_size-self.gpu_size)*self.sequence_length
+                    finish = batch_size*self.sequence_length
+                else:
+                    start = i*self.gpu_size*self.sequence_length
+                    finish = (i+1)*self.gpu_size*self.sequence_length
+                
+                idx = list(range(start,finish))
+    
+               
+                feed_dict = {self.net.observation:frame_prepped[idx,:,:,:],
+                    self.net.measurements:m_in_prepped[idx,:],
+                    self.net.action_history:a_history_batch[idx,:],
+                    self.net.lgprob_a_pi_old:a_taken_prob_batch[idx],
+                    self.net.a_taken:aidx_batch[idx,:],
+                    self.net.returns:returns_batch[idx],
+                    self.net.old_v_pred:state_value_batch[idx],
+                    self.net.GAE:gae_batch[idx],
+                    self.net.learning_rate:lr,
+                    self.net.clip_e:clip,
+                    self.net.steps:steps,
+                    self.net.c_in:c_state,
+                    self.net.h_in:h_state}
+                        
+                ploss,closs,entropy,_ = self.sess.run([self.net.pg_loss,
+                                                self.net.vf_loss,
+                                                self.net.entropy,
+                                                self.net.accum_grads],feed_dict=feed_dict)
+                
+                plossavg += ploss
+                clossavg += closs
+                entropyavg += entropy
+                
+            plossavg /= n_gpu_feeds
+            clossavg /= n_gpu_feeds
+            entropyavg /= n_gpu_feeds
+            
+            g_navg, _ = self.sess.run([self.net.grad_norms,self.net.apply_grads],
+                                      feed_dict={self.net.accum_count:n_gpu_feeds,
+                                                 self.net.learning_rate:lr})
+        
+        else:
+            plossavg,clossavg,entropyavg,g_navg = 0,0,0,0
+            
+        return plossavg,clossavg,entropyavg,g_navg
 
 
     def choose_action(self,s,m,ahistory,total_steps,testing,selected_weapon):

@@ -1,3 +1,13 @@
 *.csv
 /__pycache__*
 *.sh
+/_vizdoom*
+/gifs*
+/stats*
+__init__.py
+*.xlsx
+*.log
+*.pyc
+/*.pyc
+*.xls
+/doomfiles*

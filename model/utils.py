@@ -239,7 +239,7 @@ def get_pc_target(sbuff,local_means=False):
     return targets
 
     
-def GAE(rewards,values,g,l,bootstrap=False):
+def GAE(rewards,values,g,l,bootstrap=True):
     #rewards: length timesteps-1 list of rewards recieved from environment
     #values: length timesteps list of state value estimations from net
     #g: gamma discount factor
@@ -247,12 +247,14 @@ def GAE(rewards,values,g,l,bootstrap=False):
     #bootstrap: if true, bootstrap estimated return after episode timeout (approximates continuing rather than episodic version of problem)
     assert(len(rewards)==len(values)-1)
     tmax = len(rewards)
-    if bootstrap:
-          rewards[-1] = rewards[-1] + g*values[-1]
     lastadv = 0 
     GAE = [0] * tmax
     for t in reversed(range(tmax)):
-        delta = rewards[t] + g * values[t+1] - values[t]
-        GAE[t] = lastadv = delta + g*l*lastadv
+        if t == tmax - 1 and bootstrap==False:
+            delta = rewards[t] - values[t]
+            GAE[t] = lastadv = delta 
+        else:
+            delta = rewards[t] + g * values[t+1] - values[t]
+            GAE[t] = lastadv = delta + g*l*lastadv
     
     return GAE

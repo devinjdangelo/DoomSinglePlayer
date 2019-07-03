@@ -36,7 +36,7 @@ class ExperienceRecorder:
         self.adim = args['num_buttons']
         self.num_groups = args['num_action_splits']
         
-        self.max_episodes = args['max_episodes'] if 'max_episodes' in args else None
+        self.max_episodes = args['max_episodes']//size if 'max_episodes' in args else None
         
         self.need_to_build_offsets = False
         
@@ -63,36 +63,10 @@ class ExperienceRecorder:
         state_value = np.stack(episode_buffer[:,5]).astype(np.float32,copy=False)
         gae,rewards = self.get_gae(measurments,state_value)
 
-        if rank==0:
-            gather_frames = np.empty([size]+list(frame.shape),dtype=np.float32)
-            gather_measurements = np.empty([size]+list(measurments.shape),dtype=np.float32)
-            gather_ahist = np.empty([size]+list(a_history.shape),dtype=np.int32)
-            gather_aidx = np.empty([size]+list(aidx.shape),dtype=np.int32)
-            gather_aprob = np.empty([size]+list(a_taken_prob.shape),dtype=np.float32)
-            gather_val = np.empty([size]+list(state_value.shape),dtype=np.float32)
-            gather_gae = np.empty([size]+list(gae.shape),dtype=np.float32)
-        else:
-            gather_frames = None
-            gather_measurements = None
-            gather_ahist = None
-            gather_aidx = None
-            gather_aprob = None
-            gather_val = None
-            gather_gae = None
 
-        comm.Gather(frame,gather_frames,root=0)
-        comm.Gather(measurments,gather_measurements,root=0)
-        comm.Gather(a_history,gather_ahist,root=0)
-        comm.Gather(aidx,gather_aidx,root=0)
-        comm.Gather(a_taken_prob,gather_aprob,root=0)
-        comm.Gather(state_value,gather_val,root=0)
-        comm.Gather(gae,gather_gae,root=0)
-
-        if rank==0:
-            for i in range(size): 
-                self.add_data(gather_frames[i,:,:,:,:],gather_measurements[i,:,:],
-                    gather_ahist[i,:,:],gather_aidx[i,:,:],gather_aprob[i,:],
-                    gather_val[i,:],gather_gae[i,:])
+        self.add_data(frame,measurments,
+            a_history,aidx,a_taken_prob,
+            state_value,gae)
         return np.sum(rewards)
 
     def add_data(self,frame,measurments,a_history,aidx,a_taken_prob,state_value,gae):
