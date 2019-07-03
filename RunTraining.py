@@ -5,7 +5,7 @@ from DefaultArgs import args
 args['mode'] = 'train'
 args['model_path'] = '/home/ddangelo/Documents/Tensorflow/doom-ckpts/'
 args['load_model'] = True
-args['test_stat_file'] = 'agent_test_data24.csv'
+args['test_stat_file'] = 'agent_test_data25.csv'
 args['reset_file'] = True
 
 args['doom_files_path'] = './doomfiles/'
