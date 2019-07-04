@@ -41,7 +41,7 @@ args['keep_every_n_steps'] = 1
 args['sequence_length']  = args['episode_length']//1
 
 #has_key,ammo2,ammo3,ammo4,ammo5,health,armor,self.episode_kills,self.hits,area_explored,self.deaths,self.levels_beat
-args['reward_weights'] = [1,0,0,0,0,0,0,0,0,0.15,-0.2,3]
+args['reward_weights'] = [1,0,0,0,0,0,0,0,0,0.15,0,3]
 args['lambda'] = .95
 args['gamma'] = .99
 args['bootstrap'] = True
@@ -64,7 +64,7 @@ args['epochs_per_policy'] = 10
 args['clip_e'] = lambda f : f * 0.1
 args['learning_rate'] = lambda f: f * 2.5e-4
 args['critic_weight'] = 1
-args['entropy_weight'] = .01
+args['entropy_weight'] = .02
 
 
 #WARNING changing frame_skip changes the meaning of 'step', other args should be adjusted to account for this, e.g. offsets is in num_steps
