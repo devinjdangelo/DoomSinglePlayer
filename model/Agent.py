@@ -172,7 +172,7 @@ class DoomAgent:
             a_history_batch = a_history_batch.reshape([-1,self.num_buttons])
             aidx_batch = aidx_batch.reshape([-1,self.num_action_splits])
             a_taken_prob_batch = a_taken_prob_batch.reshape([-1])
-            state_value_batch = state_value_batch.reshape([-1])
+            state_value_batch = state_value_batcgthy7h.reshape([-1])
             gae_batch = gae_batch.reshape([-1])
             
             returns_batch = gae_batch + state_value_batch
@@ -190,7 +190,7 @@ class DoomAgent:
             self.sess.run(self.net.zero_grads)
             for i in range(n_gpu_feeds):
                 if i == n_gpu_feeds - 1:
-                    start = (batch_size-self.gpu_size)*self.sequence_length
+                    start = i*self.gpu_size*self.sequence_length
                     finish = batch_size*self.sequence_length
                 else:
                     start = i*self.gpu_size*self.sequence_length

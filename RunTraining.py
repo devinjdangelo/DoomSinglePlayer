@@ -4,8 +4,8 @@ from DefaultArgs import args
 
 args['mode'] = 'train'
 args['model_path'] = '/home/ddangelo/Documents/Tensorflow/doom-ckpts/'
-args['load_model'] = False
-args['test_stat_file'] = 'agent_test_data1.csv'
+args['load_model'] = True
+args['test_stat_file'] = 'agent_test_data2.csv'
 args['reset_file'] = True
 
 args['doom_files_path'] = './doomfiles/'
@@ -13,7 +13,7 @@ args['doom_engine'] = 'doom2.wad'
 args['gif_path'] = './gifs'
 
 #max episodes in RAM
-args['max_episodes'] = 128
+args['max_episodes'] = 64
 args['episodes_per_wad'] = 22
 args['epochs_per_policy'] = 3
 args['clip_e'] = lambda f : f * 0.2
@@ -23,23 +23,23 @@ args['use_human_data'] = False
 args['mem_location'] = '/home/djdev/Documents/Tensorflow/Doom/h5/human_data_1min_d.h5'
 args['hsize'] = 0
 #max batch size that can fit in GPU memory
-args['gpu_size'] = 19
+args['gpu_size'] = 16 #19
 
 simulator = DoomSimulator(args)
 
 #batch size may be arbitrarily large, gradients accumulated to fit in GPU memory
-batch_size = 64
-update_c = 128
+batch_size = 32
+update_c = 64
 
 save_n = 200
 test_n = 5000
 start_step = 0
 #these are the prior average performance metrics
-init_explore = 0
-init_reward = 0
-init_win = 0
-init_kills = 0
-init_keys = 0
+init_explore = 7
+init_reward = 1
+init_win = 0.0034
+init_kills = 0.24
+init_keys = 0.0024
 
 
 simulator.train(batch_size,update_n=update_c,start_step=start_step,save_n=save_n,test_n=test_n,
