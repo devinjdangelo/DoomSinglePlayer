@@ -78,7 +78,7 @@ class DoomAgent:
         #Shared memory arrays for network updates 
         total_time_steps = self.batch_size*self.sequence_length
         self.frames_update = SharedArray((total_time_steps,self.xdim,self.ydim,3))
-        self.m_update = SharedArray((total_time_steps,self.num_measurements))
+        self.m_update = SharedArray((total_time_steps,self.num_observe_m))
         self.ahist_update = SharedArray((total_time_steps,self.num_buttons))
         self.aidx_update = SharedArray((total_time_steps,self.num_action_splits))
         self.aprob_update = SharedArray(total_time_steps)
@@ -90,11 +90,11 @@ class DoomAgent:
         self.h_state = SharedArray((size,512),dtype=np.float32)
         self.frames_choose = SharedArray((size,self.xdim,self.ydim,3))
         self.m_choose = SharedArray((size,self.num_observe_m))
-        self.ahist_update = SharedArray((size,self.num_buttons))
+        self.ahist_choose = SharedArray((size,self.num_buttons))
 
-        self.actionout = SharedArray((size,self.num_buttons))
+        self.actionout = SharedArray((size,self.num_action_splits),dtype=np.int32)
         self.valueout = SharedArray((size,1))
-        self.probout = SharedArray((size,1)) 
+        self.probout = SharedArray((size)) 
  
         
     def reset_state(self):
@@ -152,12 +152,12 @@ class DoomAgent:
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
         
-        rankstart = rank*self.time_steps*batch_size
-        rankend = (rank+1)*self.time_steps*batch_size
+        rankstart = rank*self.sequence_length*batch_size
+        rankend = (rank+1)*self.sequence_length*batch_size
 
         #write prepared data to shared array
         self.frames_update[rankstart:rankend,:,:,:] = frame_prepped
-        self.m_update[rankstart:rankend,:] = measurements_batch
+        self.m_update[rankstart:rankend,:] = m_in_prepped
         self.ahist_update[rankstart:rankend,:] = a_history_batch
         self.aidx_update[rankstart:rankend,] = aidx_batch
         self.aprob_update[rankstart:rankend] = a_taken_prob_batch
@@ -171,8 +171,8 @@ class DoomAgent:
             c_state = np.zeros((self.gpu_size, self.net.cell.state_size.c), np.float32)
             h_state = np.zeros((self.gpu_size, self.net.cell.state_size.h), np.float32) 
             
-            if batch_size >= self.gpu_size:
-                n_gpu_feeds = ceil(batch_size / self.gpu_size)
+            if self.batch_size >= self.gpu_size:
+                n_gpu_feeds = ceil(self.batch_size / self.gpu_size)
             else:
                 raise ValueError('Gpu Batch Size cannot be larger than Batch Size')
                 
@@ -181,7 +181,7 @@ class DoomAgent:
             for i in range(n_gpu_feeds):
                 if i == n_gpu_feeds - 1:
                     start = i*self.gpu_size*self.sequence_length
-                    finish = batch_size*self.sequence_length
+                    finish = self.batch_size*self.sequence_length
                 else:
                     start = i*self.gpu_size*self.sequence_length
                     finish = (i+1)*self.gpu_size*self.sequence_length
@@ -247,7 +247,7 @@ class DoomAgent:
             
         self.frames_choose[rank,:,:,:] = frame_prepped
         self.m_choose[rank,:] = m_prepped
-        self.ahist_update[rank,:] = ahistory
+        self.ahist_choose[rank,:] = ahistory
 
         if rank==0:
             out_tensors = [self.net.lstm_state,self.net.critic_state_value]
@@ -261,7 +261,7 @@ class DoomAgent:
             feed_dict={
             self.net.observation:self.frames_choose,
             self.net.measurements:self.m_choose,
-            self.net.action_history:self.ahist_update,
+            self.net.action_history:self.ahist_choose,
             self.net.c_in:self.c_state,
             self.net.h_in:self.h_state,
             self.net.steps:total_steps,
@@ -275,7 +275,7 @@ class DoomAgent:
 
             self.actionout[:,:] = sendaction
             self.valueout[:,:] = sendvalue
-            self.probout[:,:] = sendprob 
+            self.probout[:] = sendprob 
         else:
             c_state = None
             h_state = None
@@ -286,10 +286,10 @@ class DoomAgent:
         #wait until rank1 writes results from gpu 
         comm.Barrier()
         action = self.actionout[rank,:]
-        prob = self.probout[rank,:]
+        prob = self.probout[rank]
         value = self.valueout[rank,:]      
         
-        vz_action = np.concatenate([self.group_actions[i][action[i]] for i in range(len(action))])
+        vz_action = np.concatenate([self.group_actions[i][int(action[i])] for i in range(len(action))])
         vz_action = vz_action.astype(np.int32,copy=False)
         
         #print("Net Raw Action", action)

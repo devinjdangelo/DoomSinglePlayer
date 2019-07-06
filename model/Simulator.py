@@ -557,7 +557,14 @@ class DoomSimulator:
 				
 	def train(self,size,update_n,start_step=0,save_n=25,test_n=25,init_explore=None,init_reward=None,
 					init_win=None,init_kills=None,init_keys=None):
-		self.env.init()
+		notstarted = False
+		while notstarted:
+			try:
+				self.env.init()
+				notstarted=True
+			except:
+				print('failed to start')
+				notstarted = False
 		training_steps = start_step
 		episode = 0
 		t = time.time()
