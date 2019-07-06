@@ -15,6 +15,7 @@ size = comm.Get_size()
 
 from model.Network import PPO
 from model.utils import *
+from model.Sharedmem import SharedArray
                
 class DoomAgent:
     def __init__(self,args):
@@ -39,9 +40,11 @@ class DoomAgent:
         self.colorspace = args['colorspace']
         self.gpu_size = args['gpu_size']
         self.sequence_length = args['episode_length'] 
+        self.batch_size = args['batch_size']
         
         #self.gpu_time = 0
         #self.sync_time = 0
+        self._initSharedMem()
         self.reset_state()
                         
         if rank==0:            
@@ -71,12 +74,32 @@ class DoomAgent:
                 self.sess.run(tf.global_variables_initializer())
                 
 
-            
-        
+    def _initSharedMem(self):       
+        #Shared memory arrays for network updates 
+        total_time_steps = self.batch_size*self.sequence_length
+        self.frames_update = SharedArray((total_time_steps,self.xdim,self.ydim,3))
+        self.m_update = SharedArray((total_time_steps,self.num_measurements))
+        self.ahist_update = SharedArray((total_time_steps,self.num_buttons))
+        self.aidx_update = SharedArray((total_time_steps,self.num_action_splits))
+        self.aprob_update = SharedArray(total_time_steps)
+        self.statevalue_update = SharedArray(total_time_steps)
+        self.gae_update = SharedArray(total_time_steps)   
+
+        #shared memory arrays for choose action
+        self.c_state = SharedArray((size,512),dtype=np.float32)
+        self.h_state = SharedArray((size,512),dtype=np.float32)
+        self.frames_choose = SharedArray((size,self.xdim,self.ydim,3))
+        self.m_choose = SharedArray((size,self.num_measurements))
+        self.ahist_update = SharedArray((size,self.num_buttons))
+
+        self.actionout = SharedArray((size,self.num_buttons))
+        self.valueout = SharedArray((size,1))
+        self.probout = SharedArray((size,1)) 
+ 
         
     def reset_state(self):
-        self.c_state = np.zeros(512, dtype=np.float32)
-        self.h_state = np.zeros(512, dtype=np.float32)    
+        self.c_state[rank,:] = np.zeros(512, dtype=np.float32)
+        self.h_state[rank,:] = np.zeros(512, dtype=np.float32)    
         
         self.attack_cooldown = 0
         self.attack_action_in_progress = [0,0]
@@ -117,10 +140,7 @@ class DoomAgent:
         
         m_in_prepped = self.prep_m(measurements_batch[:,:self.num_observe_m],verbose=False)
         
-
-        
         frame_prepped = np.zeros(frame_batch.shape,dtype=np.float32)
- 
         if self.colorspace == 'RGB':
             frame_prepped[:,:,:,0] = (frame_batch[:,:,:,0]-50)/25
             frame_prepped[:,:,:,1] = (frame_batch[:,:,:,1]-50)/25
@@ -132,51 +152,21 @@ class DoomAgent:
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
         
-        gather_frame_prepped = None
-        gather_m_in_prepped = None
-        gather_a_history_batch = None
-        gather_aidx_batch = None
-        gather_a_taken_prob_batch = None
-        gather_state_value_batch = None
-        gather_gae_batch = None
-        
-        if rank==0:
-            gather_frame_prepped = np.empty([size]+list(frame_prepped.shape),dtype=np.float32)
-            gather_m_in_prepped = np.empty([size]+list(m_in_prepped.shape),dtype=np.float32)
-            gather_a_history_batch = np.empty([size]+list(a_history_batch.shape),dtype=np.float32)
-            gather_aidx_batch = np.empty([size]+list(aidx_batch.shape),dtype=np.float32)
-            gather_a_taken_prob_batch = np.empty([size]+list(a_taken_prob_batch.shape),dtype=np.float32)
-            gather_state_value_batch = np.empty([size]+list(state_value_batch.shape),dtype=np.float32)
-            gather_gae_batch = np.empty([size]+list(gae_batch.shape),dtype=np.float32)
+        rankstart = rank*self.time_steps*batch_size
+        rankend = (rank+1)*self.time_steps*batch_size
 
-        comm.Gather(frame_prepped,gather_frame_prepped,root=0)
-        comm.Gather(m_in_prepped,gather_m_in_prepped,root=0)
-        comm.Gather(a_history_batch,gather_a_history_batch,root=0)
-        comm.Gather(aidx_batch,gather_aidx_batch,root=0)
-        comm.Gather(a_taken_prob_batch,gather_a_taken_prob_batch,root=0)
-        comm.Gather(state_value_batch,gather_state_value_batch,root=0)
-        comm.Gather(gae_batch,gather_gae_batch,root=0)
+        #write prepared data to shared array
+        self.frames_update[rankstart:rankend,:,:,:] = frame_prepped
+        self.m_update[rankstart:rankend,:] = measurements_batch
+        self.ahist_update[rankstart:rankend,:] = a_history_batch
+        self.aidx_update[rankstart:rankend,] = aidx_batch
+        self.aprob_update[rankstart:rankend] = a_taken_prob_batch
+        self.statevalue_update[rankstart:rankend] = state_value_batch
+        self.gae_update[rankstart:rankend] = gae_batch
         
-        if rank==0:
-            batch_size = batch_size*size
-            frame_prepped = gather_frame_prepped
-            m_in_prepped = gather_m_in_prepped
-            a_history_batch = gather_a_history_batch
-            aidx_batch = gather_aidx_batch
-            a_taken_prob_batch = gather_a_taken_prob_batch
-            state_value_batch = gather_state_value_batch
-            gae_batch = gather_gae_batch
-            
-            frame_prepped = frame_prepped.reshape([-1,self.xdim,self.ydim,3])
-            m_in_prepped = m_in_prepped.reshape([-1, self.num_observe_m])
-            a_history_batch = a_history_batch.reshape([-1,self.num_buttons])
-            aidx_batch = aidx_batch.reshape([-1,self.num_action_splits])
-            a_taken_prob_batch = a_taken_prob_batch.reshape([-1])
-            state_value_batch = state_value_batcgthy7h.reshape([-1])
-            gae_batch = gae_batch.reshape([-1])
-            
-            returns_batch = gae_batch + state_value_batch
-            gae_batch = (gae_batch - gae_batch.mean())/(gae_batch.std()+1e-8)
+        if rank==0:           
+            returns_update = self.gae_update + self.statevalue_update
+            self.gae_update = (self.gae_update - self.gae_update.mean())/(self.gae_update.std()+1e-8)
             
             c_state = np.zeros((self.gpu_size, self.net.cell.state_size.c), np.float32)
             h_state = np.zeros((self.gpu_size, self.net.cell.state_size.h), np.float32) 
@@ -199,14 +189,14 @@ class DoomAgent:
                 idx = list(range(start,finish))
     
                
-                feed_dict = {self.net.observation:frame_prepped[idx,:,:,:],
-                    self.net.measurements:m_in_prepped[idx,:],
-                    self.net.action_history:a_history_batch[idx,:],
-                    self.net.lgprob_a_pi_old:a_taken_prob_batch[idx],
-                    self.net.a_taken:aidx_batch[idx,:],
-                    self.net.returns:returns_batch[idx],
-                    self.net.old_v_pred:state_value_batch[idx],
-                    self.net.GAE:gae_batch[idx],
+                feed_dict = {self.net.observation:self.frames_update[idx,:,:,:],
+                    self.net.measurements:self.m_update[idx,:],
+                    self.net.action_history:self.ahist_update[idx,:],
+                    self.net.lgprob_a_pi_old:self.aprob_update[idx],
+                    self.net.a_taken:self.aidx_update[idx,:],
+                    self.net.returns:returns_update[idx],
+                    self.net.old_v_pred:self.statevalue_update[idx],
+                    self.net.GAE:self.gae_update[idx],
                     self.net.learning_rate:lr,
                     self.net.clip_e:clip,
                     self.net.steps:steps,
@@ -249,34 +239,16 @@ class DoomAgent:
             frame_prepped[:,:,2] = (s[:,:,2]-5.11)/13.3
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
-            
         
         m_in = m[:self.num_observe_m]
         m_prepped = self.prep_m(m_in)
         m_prepped = np.squeeze(m_prepped)
-        
-        fbatch = None
-        m_batch = None
-        a_batch = None
-        c_in_batch = None
-        h_in_batch = None
-        
-        if rank==0:
-            fbatch = np.empty([size]+list(frame_prepped.shape),dtype=np.float32)
-            m_batch = np.empty([size]+list(m_prepped.shape),dtype=np.float32)
-            a_batch = np.empty([size]+list(ahistory.shape),dtype=np.int32)
-            c_in_batch = np.empty([size]+list(self.c_state.shape),dtype=np.float32)
-            h_in_batch = np.empty([size]+list(self.h_state.shape),dtype=np.float32)
-        
-        #comm.Barrier()
-        #st = time.time()
-        comm.Gather(frame_prepped,fbatch,root=0)
-        comm.Gather(m_prepped,m_batch,root=0)
-        comm.Gather(ahistory,a_batch,root=0)
-        comm.Gather(self.c_state,c_in_batch,root=0)
-        comm.Gather(self.h_state,h_in_batch,root=0)
-        #self.sync_time += time.time() - st
-        
+              
+            
+        self.frames_choose[rank,:,:,:] = frame_prepped
+        self.m_choose[rank,:] = m_prepped
+        self.ahist_update[rank,:] = ahistory
+
         if rank==0:
             out_tensors = [self.net.lstm_state,self.net.critic_state_value]
             if not testing:
@@ -298,25 +270,24 @@ class DoomAgent:
             #self.gpu_time += time.time() - gt
     
             c_state, h_state = lstm_state
+            self.c_state[:,:] = c_state
+            self.h_state[:,:] = h_state  
+
+            self.actionout[:,:] = sendaction
+            self.valueout[:,:] = sendvalue
+            self.probout[:,:] = sendprob 
         else:
             c_state = None
             h_state = None
             sendvalue = None
             sendprob = None
             sendaction = None
-            
-        #comm.Barrier()
-        action = np.empty(5,dtype=np.int32)
-        prob = np.empty(1,dtype=np.float32)
-        value = np.empty(1,dtype=np.float32)
-        #st = time.time()
-        comm.Scatter(sendaction,action,root=0)
-        comm.Scatter(sendprob,prob,root=0)
-        comm.Scatter(sendvalue,value,root=0)
-        comm.Scatter(c_state,self.c_state,root=0)
-        comm.Scatter(h_state,self.h_state,root=0)
-        #self.sync_time += time.time()- st
         
+        #wait until rank1 writes results from gpu 
+        comm.Barrier()
+        action = self.actionout[rank,:]
+        prob = self.probout[rank,:]
+        value = self.valueout[rank,:]      
         
         vz_action = np.concatenate([self.group_actions[i][action[i]] for i in range(len(action))])
         vz_action = vz_action.astype(np.int32,copy=False)
