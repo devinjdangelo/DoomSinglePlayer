@@ -11,5 +11,5 @@ class SharedArray:
 		nbytes = sum(bytesize * dim for dim in shape)
 		win = MPI.Win.Allocate_shared(nbytes, itemsize, comm=comm) 
 		buf, itemsize = win.Shared_query(0) 
-		self.array = np.ndarray(buffer=buf, dtype=np.float32, shape=dims) 
+		self.array = np.ndarray(buffer=buf, dtype=np.float32, shape=shape) 
 
