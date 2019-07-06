@@ -89,7 +89,7 @@ class DoomAgent:
         self.c_state = SharedArray((size,512),dtype=np.float32)
         self.h_state = SharedArray((size,512),dtype=np.float32)
         self.frames_choose = SharedArray((size,self.xdim,self.ydim,3))
-        self.m_choose = SharedArray((size,self.num_measurements))
+        self.m_choose = SharedArray((size,self.num_observe_m))
         self.ahist_update = SharedArray((size,self.num_buttons))
 
         self.actionout = SharedArray((size,self.num_buttons))
@@ -259,11 +259,11 @@ class DoomAgent:
             #gt = time.time()
             lstm_state,sendvalue,sendaction,sendprob = self.sess.run(out_tensors, 
             feed_dict={
-            self.net.observation:fbatch,
-            self.net.measurements:m_batch,
-            self.net.action_history:a_batch,
-            self.net.c_in:c_in_batch,
-            self.net.h_in:h_in_batch,
+            self.net.observation:self.frames_choose,
+            self.net.measurements:self.m_choose,
+            self.net.action_history:self.ahist_update,
+            self.net.c_in:self.c_state,
+            self.net.h_in:self.h_state,
             self.net.steps:total_steps,
             self.net.time_steps:1})       
             
