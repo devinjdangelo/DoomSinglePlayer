@@ -85,9 +85,6 @@ class DoomAgent:
         self.statevalue_update = SharedArray(total_time_steps)
         self.gae_update = SharedArray(total_time_steps)   
 
-        #shared memory arrays for choose action
-        self.c_state = SharedArray((size,512),dtype=np.float32)
-        self.h_state = SharedArray((size,512),dtype=np.float32)
         self.frames_choose = SharedArray((size,self.xdim,self.ydim,3))
         self.m_choose = SharedArray((size,self.num_observe_m))
         self.ahist_choose = SharedArray((size,self.num_buttons))
@@ -98,8 +95,9 @@ class DoomAgent:
  
         
     def reset_state(self):
-        self.c_state[rank,:] = np.zeros(512, dtype=np.float32)
-        self.h_state[rank,:] = np.zeros(512, dtype=np.float32)    
+        if rank==0:
+            self.c_state = np.zeros((size,512), dtype=np.float32)
+            self.h_state = np.zeros((size,512), dtype=np.float32)
         
         self.attack_cooldown = 0
         self.attack_action_in_progress = [0,0]
@@ -156,13 +154,16 @@ class DoomAgent:
         rankend = (rank+1)*self.sequence_length*batch_size
 
         #write prepared data to shared array
+        #print(self.aidx_update.shape,aidx_batch.shape,state_value_batch)
+        comm.Barrier()
         self.frames_update[rankstart:rankend,:,:,:] = frame_prepped
         self.m_update[rankstart:rankend,:] = m_in_prepped
         self.ahist_update[rankstart:rankend,:] = a_history_batch
-        self.aidx_update[rankstart:rankend,] = aidx_batch
+        self.aidx_update[rankstart:rankend,:] = aidx_batch
         self.aprob_update[rankstart:rankend] = a_taken_prob_batch
         self.statevalue_update[rankstart:rankend] = state_value_batch
         self.gae_update[rankstart:rankend] = gae_batch
+        comm.Barrier()
         
         if rank==0:           
             returns_update = self.gae_update + self.statevalue_update
@@ -207,6 +208,7 @@ class DoomAgent:
                                                 self.net.vf_loss,
                                                 self.net.entropy,
                                                 self.net.accum_grads],feed_dict=feed_dict)
+                #print(self.aidx_update,self.statevalue_update)
                 
                 plossavg += ploss
                 clossavg += closs
@@ -244,10 +246,11 @@ class DoomAgent:
         m_prepped = self.prep_m(m_in)
         m_prepped = np.squeeze(m_prepped)
               
-            
+        comm.Barrier()
         self.frames_choose[rank,:,:,:] = frame_prepped
         self.m_choose[rank,:] = m_prepped
         self.ahist_choose[rank,:] = ahistory
+        comm.Barrier()
 
         if rank==0:
             out_tensors = [self.net.lstm_state,self.net.critic_state_value]
@@ -270,25 +273,24 @@ class DoomAgent:
             #self.gpu_time += time.time() - gt
     
             c_state, h_state = lstm_state
-            self.c_state[:,:] = c_state
-            self.h_state[:,:] = h_state  
+            self.c_state = c_state
+            self.h_state = h_state  
 
             self.actionout[:,:] = sendaction
             self.valueout[:,:] = sendvalue
             self.probout[:] = sendprob 
-        else:
-            c_state = None
-            h_state = None
-            sendvalue = None
-            sendprob = None
-            sendaction = None
+
         
         #wait until rank1 writes results from gpu 
         comm.Barrier()
-        action = self.actionout[rank,:]
-        prob = self.probout[rank]
-        value = self.valueout[rank,:]      
-        
+        action = np.copy(self.actionout[rank,:])
+        prob = np.copy(self.probout[rank])
+        value = np.copy(self.valueout[rank,:])
+        comm.Barrier()      
+
+        #print(self.probout,self.actionout,self.valueout)
+
+       
         vz_action = np.concatenate([self.group_actions[i][int(action[i])] for i in range(len(action))])
         vz_action = vz_action.astype(np.int32,copy=False)
         
