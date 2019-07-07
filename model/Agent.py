@@ -149,12 +149,13 @@ class DoomAgent:
             frame_prepped[:,:,:,2] = (frame_batch[:,:,:,2]-5.11)/13.3
         else:
             raise ValueError('Colorspace, ',self.colorspace,' is undefined')
-        
+    
         rankstart = rank*self.sequence_length*batch_size
         rankend = (rank+1)*self.sequence_length*batch_size
 
         #write prepared data to shared array
         #print(self.aidx_update.shape,aidx_batch.shape,state_value_batch)
+        
         comm.Barrier()
         self.frames_update[rankstart:rankend,:,:,:] = frame_prepped
         self.m_update[rankstart:rankend,:] = m_in_prepped
@@ -166,8 +167,8 @@ class DoomAgent:
         comm.Barrier()
         
         if rank==0:           
-            returns_update = self.gae_update + self.statevalue_update
-            self.gae_update = (self.gae_update - self.gae_update.mean())/(self.gae_update.std()+1e-8)
+            returns_update = np.copy(self.gae_update + self.statevalue_update)
+            self.gae_update[:] = (self.gae_update - self.gae_update.mean())/(self.gae_update.std()+1e-8)
             
             c_state = np.zeros((self.gpu_size, self.net.cell.state_size.c), np.float32)
             h_state = np.zeros((self.gpu_size, self.net.cell.state_size.h), np.float32) 
@@ -286,7 +287,7 @@ class DoomAgent:
         action = np.copy(self.actionout[rank,:])
         prob = np.copy(self.probout[rank])
         value = np.copy(self.valueout[rank,:])
-        comm.Barrier()      
+            
 
         #print(self.probout,self.actionout,self.valueout)
 

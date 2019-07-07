@@ -172,7 +172,10 @@ class PPO():
         vpredclipped = self.old_v_pred + tf.clip_by_value(tf.squeeze(self.critic_state_value)-self.old_v_pred,-self.clip_e,self.clip_e)
         vf_losses1 = tf.square(vpred - self.returns)
         vf_losses2 = tf.square(vpredclipped - self.returns)
+
+        #vf_losses1 = tf.Print(vf_losses1,[vpred,self.returns],summarize=20)
         self.vf_loss = 0.5 * tf.reduce_mean(tf.maximum(vf_losses1,vf_losses2))
+
 
         #again, by assumption of independence the entropy of overall dist is sum of entropies of component dists
         self.entropy = tf.reduce_mean(tf.add_n([d.entropy() for d in self.dists]))
