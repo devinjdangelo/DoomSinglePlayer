@@ -11,3 +11,4 @@ __init__.py
 /*.pyc
 *.xls
 /doomfiles*
+profilestats*
