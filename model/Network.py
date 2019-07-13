@@ -5,6 +5,9 @@ from tensorflow.python.keras.layers import LeakyReLU
 
 import math
 
+from mpi4py import MPI
+rank = MPI.COMM_WORLD.Get_rank()
+import horovod.tensorflow as hvd
 
 class PPO():
     def __init__(self,args):
@@ -208,5 +211,13 @@ class PPO():
         intersect = [var for var in globalvars if var.name[:-2] in checkpointvars]
         return intersect
 
+    def _build_synchronize_ops(self):
+        #create op to sync all trainable variables accross all nodes
+        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        self.sync_ops = []
+        for var in global_vars:
+            reduced_var = hvd.allreduce(var)
+            self.sync_ops.append(var.assign(reduced_var))
+                
 
 
